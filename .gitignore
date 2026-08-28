@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+config.json
+users.json
+sessions.json
+histories/
+index/
+*.npy

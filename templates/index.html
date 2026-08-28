@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>牛马客服 · 电商智能客服</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+<div id="app">
+    <div id="sidebar-overlay" class="sidebar-overlay"></div>
+
+    <!-- 侧边栏 -->
+    <aside id="sidebar">
+        <div class="sidebar-header">
+            <div class="user-info">
+                <div id="user-avatar" class="user-avatar">👦</div>
+                <div class="user-meta">
+                    <span id="user-name" class="user-name">用户</span>
+                    <span class="user-role">在线客服</span>
+                </div>
+            </div>
+            <button id="sidebar-close" class="sidebar-close" aria-label="关闭">&times;</button>
+        </div>
+
+        <div class="sidebar-section">
+            <button id="new-chat-btn" class="new-chat-btn" onclick="newConversation()">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M12 5v14M5 12h14"/>
+                </svg>
+                <span>新对话</span>
+            </button>
+        </div>
+
+        <!-- 历史记录 -->
+        <div class="sidebar-section history-section">
+            <h3 class="section-title">历史记录</h3>
+            <div id="history-list" class="history-list">
+                <div class="history-empty">暂无历史对话</div>
+            </div>
+        </div>
+
+        <!-- 模型设置 -->
+        <div class="sidebar-section settings-section">
+            <h3 class="section-title">模型设置</h3>
+            <div class="settings-row">
+                <span class="settings-label">模型</span>
+                <span class="settings-value">DeepSeek</span>
+            </div>
+            <div id="llm-status" class="llm-status disconnected">
+                <span class="llm-dot"></span>
+                <span class="llm-text">未连接</span>
+            </div>
+            <div class="api-key-input">
+                <input type="password" id="api-key-input" class="key-input"
+                       placeholder="输入 API Key..." autocomplete="off">
+                <button id="save-key-btn" class="save-key-btn">保存</button>
+            </div>
+            <p class="settings-hint">
+                未配置时使用离线 RAG 检索
+            </p>
+        </div>
+
+        <!-- 上传区域 -->
+        <div class="sidebar-section upload-section">
+            <h3 class="section-title">上传文档</h3>
+            <div id="dropzone" class="dropzone">
+                <div class="dropzone-content">
+                    <span class="upload-icon">&#128206;</span>
+                    <p>拖拽文件到此处</p>
+                    <p class="dropzone-hint">或点击选择文件</p>
+                    <p class="dropzone-formats">支持 .txt .md .csv .json .docx .pdf .xlsx .pptx</p>
+                </div>
+                <input type="file" id="file-input" multiple
+                       accept=".txt,.md,.csv,.json,.docx,.pdf,.xlsx,.xls,.pptx,.html,.htm" hidden>
+            </div>
+            <div id="upload-status" class="upload-status"></div>
+        </div>
+
+        <!-- 文档列表 -->
+        <div class="sidebar-section doc-section">
+            <div class="section-header">
+                <h3 class="section-title">知识库文档</h3>
+                <span id="doc-count" class="doc-count">0</span>
+            </div>
+            <div id="doc-list" class="doc-list">
+                <div class="doc-empty">暂无文档</div>
+            </div>
+        </div>
+
+        <!-- 底部 -->
+        <div class="sidebar-footer">
+            <div id="stats" class="stats">
+                <span class="stat-item">文档：<b id="stat-docs">0</b></span>
+                <span class="stat-item">文本块：<b id="stat-chunks">0</b></span>
+            </div>
+            <button id="logout-btn" class="logout-btn" onclick="logout()">退出登录</button>
+        </div>
+    </aside>
+
+    <!-- 主聊天区 -->
+    <main id="main">
+        <header class="chat-header">
+            <button id="sidebar-toggle" class="sidebar-toggle" aria-label="菜单">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="3" y1="6" x2="21" y2="6"/>
+                    <line x1="3" y1="12" x2="21" y2="12"/>
+                    <line x1="3" y1="18" x2="21" y2="18"/>
+                </svg>
+            </button>
+            <div class="chat-header-text">
+                <h1>牛马客服</h1>
+                <p class="chat-subtitle">商品咨询 · 退换货处理 · 售后服务</p>
+            </div>
+        </header>
+
+        <div id="chat-messages" class="chat-messages">
+            <div class="message bot-message">
+                <div class="message-avatar bot-avatar">🐂</div>
+                <div class="message-content">
+                    <div class="message-text">
+                        您好，我是客服助手<strong>牛马</strong>。我可以帮您：
+                        <br><br>
+                        <strong>商品信息</strong> — 查询商品详情、价格、尺码、库存<br>
+                        <strong>更换商品</strong> — 换货政策、换码流程<br>
+                        <strong>退换货</strong> — 退货政策、退款进度<br>
+                        <strong>物流咨询</strong> — 发货时间、运费、配送时效
+                        <br><br>
+                        <span class="example-hint">试试以下问题：</span>
+                    </div>
+                    <div class="example-questions">
+                        <button class="example-q" onclick="askExample('有哪些商品？')">有哪些商品？</button>
+                        <button class="example-q" onclick="askExample('服装尺码表是怎样的？')">服装尺码表</button>
+                        <button class="example-q" onclick="askExample('退换货政策是什么？')">退换货政策</button>
+                        <button class="example-q" onclick="askExample('蓝牙耳机的参数？')">蓝牙耳机参数</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="chat-input-area">
+            <div class="chat-input-wrapper">
+                <input type="text" id="chat-input" class="chat-input"
+                       placeholder="输入您的问题..." autocomplete="off">
+                <button id="send-btn" class="send-btn" onclick="sendMessage()">
+                    <span>发送</span>
+                    <span class="send-icon">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="22" y1="2" x2="11" y2="13"/>
+                            <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+                        </svg>
+                    </span>
+                </button>
+            </div>
+        </div>
+    </main>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/marked@12.0.0/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.9/dist/purify.min.js"></script>
+<script src="/static/js/main.js"></script>
+</body>
+</html>

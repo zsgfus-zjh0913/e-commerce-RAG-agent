@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>电商智能客服 · 登录</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body class="login-body">
+<div class="login-container">
+    <div class="login-card">
+        <div class="login-header">
+            <div class="login-logo">
+                <span class="login-logo-icon">🐂</span>
+                <span class="login-logo-text">牛马客服</span>
+            </div>
+            <p class="login-subtitle">电商智能客服系统</p>
+        </div>
+
+        <div class="login-tabs">
+            <button id="tab-login" class="login-tab active" onclick="switchTab('login')">登录</button>
+            <button id="tab-register" class="login-tab" onclick="switchTab('register')">注册</button>
+        </div>
+
+        <form id="login-form" class="login-form" onsubmit="return handleLogin(event)">
+            <div class="form-group">
+                <label class="form-label">用户名</label>
+                <input type="text" id="login-username" class="form-input"
+                       placeholder="请输入用户名" autocomplete="off">
+            </div>
+            <div class="form-group">
+                <label class="form-label">密码</label>
+                <input type="password" id="login-password" class="form-input"
+                       placeholder="请输入密码" autocomplete="off">
+            </div>
+            <button type="submit" class="form-submit" id="login-btn">登录</button>
+            <p class="form-hint">使用已注册的账号密码登录，或切换到注册创建新账号</p>
+        </form>
+
+        <form id="register-form" class="login-form hidden" onsubmit="return handleRegister(event)">
+            <div class="form-group">
+                <label class="form-label">用户名</label>
+                <input type="text" id="reg-username" class="form-input"
+                       placeholder="请输入用户名（至少2个字符）" autocomplete="off">
+            </div>
+            <div class="form-group">
+                <label class="form-label">密码</label>
+                <input type="password" id="reg-password" class="form-input"
+                       placeholder="请输入密码（至少4个字符）" autocomplete="off">
+            </div>
+            <div class="form-group">
+                <label class="form-label">选择性别</label>
+                <div class="gender-selector">
+                    <label class="gender-option" id="gender-male-label">
+                        <input type="radio" name="gender" value="male" checked
+                               onchange="selectGender('male')">
+                        <span class="gender-avatar male">👦</span>
+                        <span class="gender-text">男生</span>
+                    </label>
+                    <label class="gender-option" id="gender-female-label">
+                        <input type="radio" name="gender" value="female"
+                               onchange="selectGender('female')">
+                        <span class="gender-avatar female">👧</span>
+                        <span class="gender-text">女生</span>
+                    </label>
+                </div>
+            </div>
+            <button type="submit" class="form-submit" id="register-btn">注册并登录</button>
+            <p class="form-hint">注册后将自动登录，用户头像将根据性别显示</p>
+        </form>
+
+        <div id="login-message" class="login-message"></div>
+    </div>
+
+    <div class="login-footer">
+        <p>商品信息查询 · 退换货处理 · 售后服务</p>
+    </div>
+</div>
+
+<script>
+let selectedGender = "male";
+let isLoginMode = true;
+
+function switchTab(mode) {
+    isLoginMode = (mode === "login");
+    document.getElementById("tab-login").classList.toggle("active", isLoginMode);
+    document.getElementById("tab-register").classList.toggle("active", !isLoginMode);
+    document.getElementById("login-form").classList.toggle("hidden", !isLoginMode);
+    document.getElementById("register-form").classList.toggle("hidden", isLoginMode);
+    document.getElementById("login-message").textContent = "";
+    document.getElementById("login-message").className = "login-message";
+}
+
+function selectGender(gender) {
+    selectedGender = gender;
+    document.getElementById("gender-male-label").classList.toggle("selected", gender === "male");
+    document.getElementById("gender-female-label").classList.toggle("selected", gender === "female");
+}
+
+selectGender("male");
+
+function showLoginMessage(msg, isError) {
+    const el = document.getElementById("login-message");
+    el.textContent = msg;
+    el.className = "login-message " + (isError ? "error" : "success");
+}
+
+async function handleLogin(e) {
+    e.preventDefault();
+    const username = document.getElementById("login-username").value.trim();
+    const password = document.getElementById("login-password").value.trim();
+    if (!username || !password) {
+        showLoginMessage("请填写用户名和密码", true);
+        return false;
+    }
+    const btn = document.getElementById("login-btn");
+    btn.disabled = true;
+    btn.textContent = "登录中...";
+    try {
+        const res = await fetch("/api/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username, password }),
+        });
+        const data = await res.json();
+        if (data.success) {
+            showLoginMessage("登录成功，正在跳转...", false);
+            setTimeout(() => { window.location.href = "/"; }, 800);
+        } else {
+            showLoginMessage(data.message || "登录失败", true);
+            btn.disabled = false;
+            btn.textContent = "登录";
+        }
+    } catch (err) {
+        showLoginMessage("网络错误: " + err.message, true);
+        btn.disabled = false;
+        btn.textContent = "登录";
+    }
+    return false;
+}
+
+async function handleRegister(e) {
+    e.preventDefault();
+    const username = document.getElementById("reg-username").value.trim();
+    const password = document.getElementById("reg-password").value.trim();
+    if (!username || !password) {
+        showLoginMessage("请填写用户名和密码", true);
+        return false;
+    }
+    const btn = document.getElementById("register-btn");
+    btn.disabled = true;
+    btn.textContent = "注册中...";
+    try {
+        const res = await fetch("/api/register", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username, password, gender: selectedGender }),
+        });
+        const data = await res.json();
+        if (data.success) {
+            showLoginMessage("注册成功，正在跳转...", false);
+            setTimeout(() => { window.location.href = "/"; }, 800);
+        } else {
+            showLoginMessage(data.message || "注册失败", true);
+            btn.disabled = false;
+            btn.textContent = "注册并登录";
+        }
+    } catch (err) {
+        showLoginMessage("网络错误: " + err.message, true);
+        btn.disabled = false;
+        btn.textContent = "注册并登录";
+    }
+    return false;
+}
+</script>
+</body>
+</html>
