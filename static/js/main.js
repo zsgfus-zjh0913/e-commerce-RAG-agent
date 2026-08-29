@@ -13,12 +13,16 @@ const apiKeyInput = document.getElementById("api-key-input");
 const saveKeyBtn = document.getElementById("save-key-btn");
 const llmStatus = document.getElementById("llm-status");
 const sidebar = document.getElementById("sidebar");
-const sidebarToggle = document.getElementById("sidebar-toggle");
-const sidebarClose = document.getElementById("sidebar-close");
+const sidebarToggleBtn = document.getElementById("sidebar-toggle");
+const sidebarExpand = document.getElementById("sidebar-expand");
 const sidebarOverlay = document.getElementById("sidebar-overlay");
 const historyList = document.getElementById("history-list");
+const ticketList = document.getElementById("ticket-list");
+const ticketCount = document.getElementById("ticket-count");
 const userAvatar = document.getElementById("user-avatar");
 const userName = document.getElementById("user-name");
+const apiKeyToggle = document.getElementById("api-key-toggle");
+const apiKeyDropdown = document.getElementById("api-key-dropdown");
 
 // ═══ 全局状态 ═══
 let sessionId = null;
@@ -72,24 +76,16 @@ function getUserAvatar() {
 
 // ═══ 侧边栏控制（可收起） ═══
 function openSidebar() {
-    sidebar.classList.add("open");
+    sidebar.classList.add("show");
     sidebarOverlay.classList.add("active");
 }
 
 function closeSidebar() {
-    sidebar.classList.remove("open");
+    sidebar.classList.remove("show");
     sidebarOverlay.classList.remove("active");
 }
 
-sidebarToggle.addEventListener("click", () => {
-    if (window.innerWidth <= 768) {
-        openSidebar();
-    } else {
-        sidebar.classList.toggle("collapsed");
-    }
-});
-
-sidebarClose.addEventListener("click", () => {
+sidebarToggleBtn.addEventListener("click", () => {
     if (window.innerWidth <= 768) {
         closeSidebar();
     } else {
@@ -97,7 +93,31 @@ sidebarClose.addEventListener("click", () => {
     }
 });
 
+sidebarExpand.addEventListener("click", () => {
+    if (window.innerWidth <= 768) {
+        openSidebar();
+    } else {
+        sidebar.classList.remove("collapsed");
+    }
+});
+
 sidebarOverlay.addEventListener("click", closeSidebar);
+
+// ═══ API Key 面板 ═══
+apiKeyToggle.addEventListener("click", (e) => {
+    e.stopPropagation();
+    apiKeyDropdown.classList.toggle("show");
+});
+
+document.addEventListener("click", (e) => {
+    if (!apiKeyDropdown.contains(e.target) && !apiKeyToggle.contains(e.target)) {
+        apiKeyDropdown.classList.remove("show");
+    }
+});
+
+apiKeyDropdown.addEventListener("click", (e) => {
+    e.stopPropagation();
+});
 
 // ═══ 用户信息加载 ═══
 async function loadUserInfo() {
@@ -145,11 +165,11 @@ async function initSession() {
 // ═══ API Key 管理 ═══
 function updateLlmStatus(enabled) {
     if (enabled) {
-        llmStatus.className = "llm-status connected";
-        llmStatus.querySelector(".llm-text").textContent = "已连接";
+        llmStatus.className = "llm-status-badge connected";
+        llmStatus.querySelector(".llm-text").textContent = "在线模式";
     } else {
-        llmStatus.className = "llm-status disconnected";
-        llmStatus.querySelector(".llm-text").textContent = "未连接 · 离线RAG";
+        llmStatus.className = "llm-status-badge disconnected";
+        llmStatus.querySelector(".llm-text").textContent = "离线模式";
     }
 }
 
@@ -213,9 +233,8 @@ function renderHistoryList(convs) {
         item.className = "history-item" + (conv.id === conversationId ? " active" : "");
         item.onclick = () => loadConversation(conv.id);
         item.innerHTML = `
-            <span class="history-icon">💬</span>
-            <span class="history-title">${escapeHtml(conv.title)}</span>
-            <button class="history-delete" onclick="deleteConversation(event, '${conv.id}')" title="删除">✕</button>
+            <span class="history-item-title">${escapeHtml(conv.title)}</span>
+            <button class="history-item-delete" onclick="deleteConversation(event, '${conv.id}')" title="删除">✕</button>
         `;
         historyList.appendChild(item);
     });
@@ -275,7 +294,7 @@ function newConversation() {
 function showWelcomeMessage() {
     chatMessages.innerHTML = `
         <div class="message bot-message">
-            <div class="message-avatar">🐂</div>
+            <div class="message-avatar bot-avatar">🐂</div>
             <div class="message-content">
                 <div class="message-text">
                     您好，我是客服助手<strong>牛马</strong>。我可以帮您：
@@ -283,7 +302,8 @@ function showWelcomeMessage() {
                     <strong>商品信息</strong> — 查询商品详情、价格、尺码、库存<br>
                     <strong>更换商品</strong> — 换货政策、换码流程<br>
                     <strong>退换货</strong> — 退货政策、退款进度<br>
-                    <strong>物流咨询</strong> — 发货时间、运费、配送时效
+                    <strong>物流咨询</strong> — 发货时间、运费、配送时效<br>
+                    <strong>转人工</strong> — 说"转人工"即可接入人工客服
                     <br><br>
                     <span class="example-hint">试试以下问题：</span>
                 </div>
@@ -292,6 +312,7 @@ function showWelcomeMessage() {
                     <button class="example-q" onclick="askExample('服装尺码表是怎样的？')">服装尺码表</button>
                     <button class="example-q" onclick="askExample('退换货政策是什么？')">退换货政策</button>
                     <button class="example-q" onclick="askExample('蓝牙耳机的参数？')">蓝牙耳机参数</button>
+                    <button class="example-q" onclick="askExample('我要退款')">申请退款</button>
                 </div>
             </div>
         </div>
@@ -304,7 +325,7 @@ function addMessage(role, text, sources) {
     wrapper.className = `message ${role}-message`;
 
     const avatar = document.createElement("div");
-    avatar.className = "message-avatar";
+    avatar.className = "message-avatar " + (role === "user" ? "user-avatar-msg" : "bot-avatar");
     avatar.textContent = role === "user" ? getUserAvatar() : "🐂";
 
     const content = document.createElement("div");
@@ -341,7 +362,7 @@ function addTypingIndicator() {
     wrapper.id = "typing-wrapper";
 
     const avatar = document.createElement("div");
-    avatar.className = "message-avatar";
+    avatar.className = "message-avatar bot-avatar";
     avatar.textContent = "🐂";
 
     const indicator = document.createElement("div");
@@ -437,6 +458,11 @@ async function handleSSEResponse(res) {
                         // 改写查询内部使用，不展示给用户
                     } else if (evt.type === "rewrite_error") {
                         // 改写失败静默处理，不影响回答
+                    } else if (evt.type === "ticket") {
+                        // 工单创建成功，刷新工单列表
+                        if (evt.data) {
+                            loadTickets();
+                        }
                     } else if (evt.type === "sources") {
                         sources = evt.data || [];
                     } else if (evt.type === "delta") {
@@ -620,12 +646,57 @@ async function loadStats() {
     }
 }
 
+// ═══ 工单管理 ═══
+async function loadTickets() {
+    try {
+        const res = await fetch("/api/ticket/list");
+        if (res.status === 401) { window.location.href = "/login"; return; }
+        const data = await res.json();
+        renderTicketList(data.tickets || []);
+    } catch (err) {
+        console.error("加载工单失败:", err);
+    }
+}
+
+function renderTicketList(tickets) {
+    ticketCount.textContent = tickets.length;
+    if (tickets.length === 0) {
+        ticketList.innerHTML = '<div class="ticket-empty">暂无工单</div>';
+        return;
+    }
+    ticketList.innerHTML = "";
+    tickets.forEach((t) => {
+        const statusText = {
+            pending: "待处理",
+            approved: "已确认",
+            rejected: "已拒绝",
+            resolved: "已完成",
+        }[t.status] || t.status;
+        const typeText = {
+            refund: "退款",
+            human_agent: "转人工",
+        }[t.ticket_type] || t.ticket_type;
+        const item = document.createElement("div");
+        item.className = "ticket-card";
+        item.innerHTML = `
+            <div class="ticket-card-header">
+                <span class="ticket-type-badge ${t.ticket_type}">${typeText}</span>
+                <span class="ticket-status ${t.status}">${statusText}</span>
+            </div>
+            <div class="ticket-id">${escapeHtml(t.ticket_id)}</div>
+            <div class="ticket-subject" title="${escapeHtml(t.subject)}">${escapeHtml(t.subject)}</div>
+        `;
+        ticketList.appendChild(item);
+    });
+}
+
 // ═══ 初始化 ═══
 (async function init() {
     await loadUserInfo();
     await initSession();
     await loadSettings();
     await loadHistory();
+    await loadTickets();
     await loadDocuments();
     await loadStats();
     chatInput.focus();

@@ -98,6 +98,10 @@ class RAGEngine:
                 print("[RAG] 跳过重排序，使用粗排结果")
         return self._reranker
 
+    def rebuild(self):
+        """公开方法：强制重建索引（数据库更新后调用）。"""
+        self._rebuild()
+
     def _load_or_build_index(self):
         emb_path = self.index_dir / "embeddings.npy"
         chunks_path = self.index_dir / "chunks.json"
@@ -334,10 +338,63 @@ class RAGEngine:
 
         return chunks
 
+    def _load_from_database(self):
+        """从数据库加载商品、FAQ、物流政策、尺码表数据。"""
+        chunks = []
+        try:
+            from database import get_db, close_db, Product, FAQ, ShippingPolicy, SizeChart
+            db = get_db()
+            try:
+                for p in db.query(Product).all():
+                    text = p.to_text()
+                    chunks.extend(self._split_chunks(
+                        text, f"products.json",
+                        {"source": "products.json", "type": "database", "product_id": p.product_id}
+                    ))
+
+                for f in db.query(FAQ).all():
+                    text = f.to_text()
+                    chunks.extend(self._split_chunks(
+                        text, "faq.txt",
+                        {"source": "faq.txt", "type": "database", "category": f.category}
+                    ))
+
+                for sp in db.query(ShippingPolicy).all():
+                    chunks.extend(self._split_chunks(
+                        sp.content, "shipping_policy.md",
+                        {"source": "shipping_policy.md", "type": "database"}
+                    ))
+
+                for sc in db.query(SizeChart).all():
+                    text = sc.to_text()
+                    chunks.extend(self._split_chunks(
+                        text, "size_chart.csv",
+                        {"source": "size_chart.csv", "type": "database", "product_type": sc.product_type}
+                    ))
+
+                if chunks:
+                    print(f"[RAG] 从数据库加载 {len(chunks)} chunks")
+            finally:
+                close_db(db)
+        except Exception as e:
+            print(f"[RAG] 数据库加载失败（将使用文件数据）: {e}")
+        return chunks
+
+    # 已迁移到数据库的原始数据文件，加载数据库后跳过这些文件避免重复索引
+    DB_MANAGED_FILES = {"products.json", "faq.txt", "shipping_policy.md", "size_chart.csv"}
+
     def _rebuild(self):
         self.chunks = []
+
+        # 优先从数据库加载
+        db_chunks = self._load_from_database()
+        self.chunks.extend(db_chunks)
+
+        # 从文件加载（跳过已迁移到数据库的原始文件，避免重复索引）
         for filepath in sorted(self.data_dir.iterdir()):
             if filepath.is_file() and filepath.suffix.lower() in SUPPORTED_EXTENSIONS:
+                if db_chunks and filepath.name in self.DB_MANAGED_FILES:
+                    continue
                 try:
                     docs = self._load_file(filepath)
                     for text, meta in docs:

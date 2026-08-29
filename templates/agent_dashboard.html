@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>坐席工作台</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+            background: #F0F2F5;
+            color: #1a1a2e;
+        }
+        .dashboard-header {
+            background: linear-gradient(135deg, #1a1a2e 0%, #0f3460 100%);
+            color: white;
+            padding: 16px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.1);
+        }
+        .header-left { display: flex; align-items: center; gap: 16px; }
+        .header-left h1 { font-size: 20px; font-weight: 700; }
+        .header-left .badge {
+            background: rgba(255,255,255,0.15); padding: 4px 12px;
+            border-radius: 20px; font-size: 12px; font-weight: 600;
+        }
+        .header-right { display: flex; align-items: center; gap: 12px; }
+        .agent-name { font-size: 14px; opacity: 0.9; }
+        .btn-logout {
+            background: rgba(255,255,255,0.15); border: none; color: white;
+            padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 13px;
+            transition: all 0.3s;
+        }
+        .btn-logout:hover { background: rgba(255,255,255,0.25); }
+        .tabs {
+            background: white; padding: 0 24px; display: flex; gap: 4px;
+            border-bottom: 1px solid #e2e8f0;
+        }
+        .tab {
+            padding: 12px 20px; background: none; border: none; cursor: pointer;
+            font-size: 14px; font-weight: 600; color: #718096;
+            border-bottom: 2px solid transparent; transition: all 0.3s;
+        }
+        .tab.active { color: #0f3460; border-bottom-color: #0f3460; }
+        .tab:hover { color: #0f3460; }
+        .tab .tab-count {
+            background: #e2e8f0; color: #4a5568; font-size: 11px;
+            padding: 1px 6px; border-radius: 10px; margin-left: 4px;
+        }
+        .tab .tab-count.pending { background: #fef3cd; color: #856404; }
+        .content { padding: 24px; max-width: 1200px; margin: 0 auto; }
+        .tab-panel { display: none; }
+        .tab-panel.active { display: block; }
+        .stats-grid {
+            display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px;
+            margin-bottom: 24px;
+        }
+        .stat-card {
+            background: white; border-radius: 12px; padding: 20px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+        }
+        .stat-card .stat-label { font-size: 12px; color: #a0aec0; font-weight: 600; }
+        .stat-card .stat-value { font-size: 28px; font-weight: 800; margin-top: 6px; }
+        .stat-card.pending .stat-value { color: #d69e2e; }
+        .stat-card.approved .stat-value { color: #38a169; }
+        .stat-card.rejected .stat-value { color: #e53e3e; }
+        .stat-card.resolved .stat-value { color: #3182ce; }
+        .stat-card.orders .stat-value { color: #805ad5; }
+        .section { margin-bottom: 24px; }
+        .section-title { font-size: 16px; font-weight: 700; margin-bottom: 12px; color: #1a1a2e; }
+        .ticket-table, .order-table, .log-table {
+            width: 100%; border-collapse: collapse; background: white;
+            border-radius: 12px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+        }
+        .ticket-table th, .order-table th, .log-table th {
+            background: #f7fafc; padding: 10px 14px; text-align: left;
+            font-size: 12px; font-weight: 700; color: #718096;
+            text-transform: uppercase; letter-spacing: 0.5px;
+            border-bottom: 1px solid #e2e8f0;
+        }
+        .ticket-table td, .order-table td, .log-table td {
+            padding: 12px 14px; font-size: 13px; border-bottom: 1px solid #edf2f7;
+        }
+        .ticket-table tr:last-child td, .order-table tr:last-child td, .log-table tr:last-child td {
+            border-bottom: none;
+        }
+        .status-badge {
+            display: inline-block; padding: 3px 10px; border-radius: 20px;
+            font-size: 11px; font-weight: 600;
+        }
+        .status-badge.pending { background: #fef3cd; color: #856404; }
+        .status-badge.approved { background: #d4edda; color: #155724; }
+        .status-badge.rejected { background: #f8d7da; color: #721c24; }
+        .status-badge.resolved { background: #d1ecf1; color: #0c5460; }
+        .type-badge {
+            display: inline-block; padding: 2px 8px; border-radius: 4px;
+            font-size: 11px; font-weight: 600;
+        }
+        .type-badge.refund { background: rgba(15,52,96,0.1); color: #0f3460; }
+        .type-badge.human_agent { background: rgba(78,205,196,0.12); color: #3dbdb4; }
+        .action-btns { display: flex; gap: 6px; }
+        .action-btn {
+            padding: 5px 12px; border: none; border-radius: 6px;
+            font-size: 12px; font-weight: 600; cursor: pointer; transition: all 0.3s;
+        }
+        .action-btn.approve { background: #d4edda; color: #155724; }
+        .action-btn.approve:hover { background: #38a169; color: white; }
+        .action-btn.reject { background: #f8d7da; color: #721c24; }
+        .action-btn.reject:hover { background: #e53e3e; color: white; }
+        .action-btn.resolve { background: #d1ecf1; color: #0c5460; }
+        .action-btn.resolve:hover { background: #3182ce; color: white; }
+        .reply-input {
+            width: 100%; padding: 8px 10px; border: 1px solid #e2e8f0;
+            border-radius: 6px; font-size: 12px; margin-top: 6px; outline: none;
+        }
+        .reply-input:focus { border-color: #0f3460; }
+        .search-bar {
+            display: flex; gap: 8px; margin-bottom: 16px;
+        }
+        .search-input {
+            flex: 1; padding: 10px 14px; border: 1px solid #e2e8f0;
+            border-radius: 8px; font-size: 14px; outline: none;
+        }
+        .search-input:focus { border-color: #0f3460; }
+        .search-btn {
+            padding: 10px 20px; background: #0f3460; color: white;
+            border: none; border-radius: 8px; font-size: 14px;
+            font-weight: 600; cursor: pointer; transition: all 0.3s;
+        }
+        .search-btn:hover { background: #1a1a2e; }
+        .filter-bar {
+            display: flex; gap: 8px; margin-bottom: 16px;
+        }
+        .filter-btn {
+            padding: 6px 14px; background: white; border: 1px solid #e2e8f0;
+            border-radius: 20px; font-size: 13px; cursor: pointer;
+            color: #718096; transition: all 0.3s;
+        }
+        .filter-btn.active { background: #0f3460; color: white; border-color: #0f3460; }
+        .order-status-select {
+            padding: 4px 8px; border: 1px solid #e2e8f0; border-radius: 4px;
+            font-size: 12px; outline: none; cursor: pointer;
+        }
+        .empty-state {
+            text-align: center; padding: 40px; color: #a0aec0; font-size: 14px;
+        }
+        .log-level {
+            display: inline-block; padding: 1px 6px; border-radius: 3px;
+            font-size: 10px; font-weight: 700;
+        }
+        .log-level.INFO { background: #e2e8f0; color: #4a5568; }
+        .log-level.WARN { background: #fef3cd; color: #856404; }
+        .log-level.ERROR { background: #f8d7da; color: #721c24; }
+        .log-level.AUDIT { background: #d1ecf1; color: #0c5460; }
+        @media (max-width: 768px) {
+            .stats-grid { grid-template-columns: repeat(2, 1fr); }
+            .ticket-table, .order-table { font-size: 12px; }
+            .ticket-table th, .ticket-table td, .order-table th, .order-table td { padding: 8px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="dashboard-header">
+        <div class="header-left">
+            <h1>坐席工作台</h1>
+            <span class="badge" id="agent-badge">坐席</span>
+        </div>
+        <div class="header-right">
+            <span class="agent-name" id="agent-name"></span>
+            <button class="btn-logout" onclick="logout()">退出</button>
+        </div>
+    </div>
+
+    <div class="tabs">
+        <button class="tab active" onclick="switchTab('dashboard')">仪表盘</button>
+        <button class="tab" onclick="switchTab('tickets')">待处理工单<span class="tab-count pending" id="pending-count">0</span></button>
+        <button class="tab" onclick="switchTab('orders')">订单管理</button>
+        <button class="tab" onclick="switchTab('audit')">审计日志</button>
+        <button class="tab" onclick="switchTab('logs')">系统日志</button>
+    </div>
+
+    <div class="content">
+        <!-- 仪表盘 -->
+        <div class="tab-panel active" id="panel-dashboard">
+            <div class="stats-grid">
+                <div class="stat-card pending">
+                    <div class="stat-label">待处理工单</div>
+                    <div class="stat-value" id="stat-pending">0</div>
+                </div>
+                <div class="stat-card approved">
+                    <div class="stat-label">已确认</div>
+                    <div class="stat-value" id="stat-approved">0</div>
+                </div>
+                <div class="stat-card rejected">
+                    <div class="stat-label">已拒绝</div>
+                    <div class="stat-value" id="stat-rejected">0</div>
+                </div>
+                <div class="stat-card resolved">
+                    <div class="stat-label">已完成</div>
+                    <div class="stat-value" id="stat-resolved">0</div>
+                </div>
+                <div class="stat-card orders">
+                    <div class="stat-label">订单总数</div>
+                    <div class="stat-value" id="stat-orders">0</div>
+                </div>
+            </div>
+
+            <div class="section">
+                <div class="section-title">待处理工单</div>
+                <table class="ticket-table" id="pending-table">
+                    <thead>
+                        <tr>
+                            <th>工单号</th><th>类型</th><th>用户</th><th>内容</th>
+                            <th>时间</th><th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="pending-tbody"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- 工单管理 -->
+        <div class="tab-panel" id="panel-tickets">
+            <div class="filter-bar">
+                <button class="filter-btn active" onclick="filterTickets('', this)">全部</button>
+                <button class="filter-btn" onclick="filterTickets('pending', this)">待处理</button>
+                <button class="filter-btn" onclick="filterTickets('approved', this)">已确认</button>
+                <button class="filter-btn" onclick="filterTickets('rejected', this)">已拒绝</button>
+                <button class="filter-btn" onclick="filterTickets('resolved', this)">已完成</button>
+            </div>
+            <table class="ticket-table">
+                <thead>
+                    <tr>
+                        <th>工单号</th><th>类型</th><th>用户</th><th>内容</th>
+                        <th>状态</th><th>处理人</th><th>回复</th><th>时间</th>
+                    </tr>
+                </thead>
+                <tbody id="all-tickets-tbody"></tbody>
+            </table>
+        </div>
+
+        <!-- 订单管理 -->
+        <div class="tab-panel" id="panel-orders">
+            <div class="search-bar">
+                <input type="text" class="search-input" id="order-search" placeholder="输入用户名或订单号查询...">
+                <button class="search-btn" onclick="searchOrders()">搜索</button>
+            </div>
+            <table class="order-table">
+                <thead>
+                    <tr>
+                        <th>订单号</th><th>用户</th><th>商品</th><th>数量</th>
+                        <th>金额</th><th>状态</th><th>快递单号</th><th>修改状态</th>
+                    </tr>
+                </thead>
+                <tbody id="orders-tbody"></tbody>
+            </table>
+        </div>
+
+        <!-- 审计日志 -->
+        <div class="tab-panel" id="panel-audit">
+            <table class="log-table">
+                <thead>
+                    <tr>
+                        <th>时间</th><th>操作者</th><th>类型</th><th>动作</th>
+                        <th>目标</th><th>详情</th>
+                    </tr>
+                </thead>
+                <tbody id="audit-tbody"></tbody>
+            </table>
+        </div>
+
+        <!-- 系统日志 -->
+        <div class="tab-panel" id="panel-logs">
+            <table class="log-table">
+                <thead>
+                    <tr>
+                        <th>时间</th><th>级别</th><th>模块</th><th>消息</th>
+                    </tr>
+                </thead>
+                <tbody id="logs-tbody"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        let currentFilter = "";
+
+        function fmtTime(ts) {
+            if (!ts) return "-";
+            const d = new Date(ts * 1000);
+            return d.toLocaleString("zh-CN");
+        }
+
+        function switchTab(name) {
+            document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+            document.querySelectorAll(".tab-panel").forEach(p => p.classList.remove("active"));
+            event.target.closest(".tab").classList.add("active");
+            document.getElementById("panel-" + name).classList.add("active");
+
+            if (name === "tickets") loadAllTickets();
+            if (name === "orders") loadOrders();
+            if (name === "audit") loadAuditLogs();
+            if (name === "logs") loadSystemLogs();
+        }
+
+        async function loadDashboard() {
+            try {
+                const res = await fetch("/api/agent/dashboard");
+                if (res.status === 401) { window.location.href = "/agent/login"; return; }
+                const data = await res.json();
+                document.getElementById("stat-pending").textContent = data.stats.pending;
+                document.getElementById("stat-approved").textContent = data.stats.approved;
+                document.getElementById("stat-rejected").textContent = data.stats.rejected;
+                document.getElementById("stat-resolved").textContent = data.stats.resolved;
+                document.getElementById("stat-orders").textContent = data.stats.total_orders;
+                document.getElementById("pending-count").textContent = data.stats.pending;
+
+                const tbody = document.getElementById("pending-tbody");
+                if (data.pending_tickets.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="6" class="empty-state">暂无待处理工单</td></tr>';
+                    return;
+                }
+                tbody.innerHTML = "";
+                data.pending_tickets.forEach(t => {
+                    const tr = document.createElement("tr");
+                    const typeText = t.ticket_type === "refund" ? "退款" : "转人工";
+                    tr.innerHTML = `
+                        <td style="font-family:monospace;font-size:12px">${t.ticket_id}</td>
+                        <td><span class="type-badge ${t.ticket_type}">${typeText}</span></td>
+                        <td>${t.username}</td>
+                        <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${t.subject}">${t.subject}</td>
+                        <td style="font-size:12px">${fmtTime(t.created_at)}</td>
+                        <td>
+                            <div class="action-btns">
+                                <button class="action-btn approve" onclick="processTicket('${t.ticket_id}', 'approve')">确认</button>
+                                <button class="action-btn reject" onclick="processTicket('${t.ticket_id}', 'reject')">拒绝</button>
+                                <button class="action-btn resolve" onclick="processTicket('${t.ticket_id}', 'resolve')">完成</button>
+                            </div>
+                            <input type="text" class="reply-input" id="reply-${t.ticket_id}" placeholder="回复内容...">
+                        </td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+            } catch (err) {
+                console.error("加载仪表盘失败:", err);
+            }
+        }
+
+        async function loadAllTickets() {
+            const url = currentFilter ? `/api/agent/tickets?status=${currentFilter}` : "/api/agent/tickets";
+            try {
+                const res = await fetch(url);
+                if (res.status === 401) { window.location.href = "/agent/login"; return; }
+                const data = await res.json();
+                const tbody = document.getElementById("all-tickets-tbody");
+                if (data.tickets.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="8" class="empty-state">暂无工单</td></tr>';
+                    return;
+                }
+                tbody.innerHTML = "";
+                data.tickets.forEach(t => {
+                    const typeText = t.ticket_type === "refund" ? "退款" : "转人工";
+                    const tr = document.createElement("tr");
+                    tr.innerHTML = `
+                        <td style="font-family:monospace;font-size:12px">${t.ticket_id}</td>
+                        <td><span class="type-badge ${t.ticket_type}">${typeText}</span></td>
+                        <td>${t.username}</td>
+                        <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${t.subject}">${t.subject}</td>
+                        <td><span class="status-badge ${t.status}">${t.status}</span></td>
+                        <td>${t.handled_by || "-"}</td>
+                        <td style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${t.agent_reply || ''}">${t.agent_reply || "-"}</td>
+                        <td style="font-size:12px">${fmtTime(t.updated_at)}</td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+            } catch (err) {
+                console.error("加载工单失败:", err);
+            }
+        }
+
+        function filterTickets(status, btn) {
+            currentFilter = status;
+            document.querySelectorAll(".filter-btn").forEach(b => b.classList.remove("active"));
+            btn.classList.add("active");
+            loadAllTickets();
+        }
+
+        async function processTicket(ticketId, action) {
+            const replyEl = document.getElementById("reply-" + ticketId);
+            const reply = replyEl ? replyEl.value.trim() : "";
+            const actionText = { approve: "确认", reject: "拒绝", resolve: "完成" }[action];
+            if (!confirm(`确定要${actionText}此工单吗？`)) return;
+
+            try {
+                const res = await fetch(`/api/agent/ticket/${ticketId}/process`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ action, reply }),
+                });
+                const data = await res.json();
+                if (data.success) {
+                    alert("工单已" + actionText);
+                    loadDashboard();
+                    loadAllTickets();
+                } else {
+                    alert("操作失败: " + (data.error || ""));
+                }
+            } catch (err) {
+                alert("网络错误: " + err.message);
+            }
+        }
+
+        async function loadOrders(customer) {
+            const url = customer ? `/api/agent/orders?customer=${encodeURIComponent(customer)}` : "/api/agent/orders";
+            try {
+                const res = await fetch(url);
+                if (res.status === 401) { window.location.href = "/agent/login"; return; }
+                const data = await res.json();
+                const tbody = document.getElementById("orders-tbody");
+                if (data.orders.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="8" class="empty-state">暂无订单</td></tr>';
+                    return;
+                }
+                tbody.innerHTML = "";
+                data.orders.forEach(o => {
+                    const tr = document.createElement("tr");
+                    const statuses = ["pending", "paid", "shipped", "delivered", "refunded", "cancelled"];
+                    const statusLabels = {pending:"待付款",paid:"已付款",shipped:"已发货",delivered:"已签收",refunded:"已退款",cancelled:"已取消"};
+                    tr.innerHTML = `
+                        <td style="font-family:monospace;font-size:12px">${o.order_id}</td>
+                        <td>${o.customer_username}</td>
+                        <td style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${o.product_name}</td>
+                        <td>${o.quantity}</td>
+                        <td>${o.amount}元</td>
+                        <td><span class="status-badge ${o.status==='pending'?'pending':o.status==='delivered'?'resolved':o.status==='refunded'?'rejected':'approved'}">${statusLabels[o.status]||o.status}</span></td>
+                        <td style="font-size:12px">${o.tracking_number || "-"}</td>
+                        <td>
+                            <select class="order-status-select" onchange="updateOrderStatus('${o.order_id}', this.value)">
+                                ${statuses.map(s => `<option value="${s}" ${s===o.status?'selected':''}>${statusLabels[s]}</option>`).join("")}
+                            </select>
+                        </td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+            } catch (err) {
+                console.error("加载订单失败:", err);
+            }
+        }
+
+        function searchOrders() {
+            const q = document.getElementById("order-search").value.trim();
+            loadOrders(q);
+        }
+
+        async function updateOrderStatus(orderId, newStatus) {
+            try {
+                const res = await fetch(`/api/agent/order/${orderId}/status`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ status: newStatus }),
+                });
+                const data = await res.json();
+                if (data.success) {
+                    alert("订单状态已更新");
+                } else {
+                    alert("更新失败: " + (data.error || ""));
+                    loadOrders();
+                }
+            } catch (err) {
+                alert("网络错误: " + err.message);
+            }
+        }
+
+        async function loadAuditLogs() {
+            try {
+                const res = await fetch("/api/agent/audit-logs");
+                if (res.status === 401) { window.location.href = "/agent/login"; return; }
+                const data = await res.json();
+                const tbody = document.getElementById("audit-tbody");
+                if (data.logs.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="6" class="empty-state">暂无审计日志</td></tr>';
+                    return;
+                }
+                tbody.innerHTML = "";
+                data.logs.forEach(l => {
+                    const tr = document.createElement("tr");
+                    tr.innerHTML = `
+                        <td style="font-size:12px">${fmtTime(l.created_at)}</td>
+                        <td>${l.actor_name}</td>
+                        <td><span class="type-badge">${l.actor_type}</span></td>
+                        <td>${l.action}</td>
+                        <td style="font-size:12px">${l.target_type || "-"}:${l.target_id || "-"}</td>
+                        <td style="max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${l.detail||''}">${l.detail || "-"}</td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+            } catch (err) {
+                console.error("加载审计日志失败:", err);
+            }
+        }
+
+        async function loadSystemLogs() {
+            try {
+                const res = await fetch("/api/agent/system-logs");
+                if (res.status === 401) { window.location.href = "/agent/login"; return; }
+                const data = await res.json();
+                const tbody = document.getElementById("logs-tbody");
+                if (data.logs.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="4" class="empty-state">暂无系统日志</td></tr>';
+                    return;
+                }
+                tbody.innerHTML = "";
+                data.logs.reverse().forEach(l => {
+                    const tr = document.createElement("tr");
+                    tr.innerHTML = `
+                        <td style="font-size:12px">${l.ts}</td>
+                        <td><span class="log-level ${l.level}">${l.level}</span></td>
+                        <td>${l.module}</td>
+                        <td>${l.message}</td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+            } catch (err) {
+                console.error("加载系统日志失败:", err);
+            }
+        }
+
+        async function loadAgentInfo() {
+            try {
+                const res = await fetch("/api/agent/me");
+                if (res.status === 401) { window.location.href = "/agent/login"; return; }
+                const data = await res.json();
+                document.getElementById("agent-name").textContent = data.name;
+                document.getElementById("agent-badge").textContent = data.name;
+            } catch (err) {
+                window.location.href = "/agent/login";
+            }
+        }
+
+        async function logout() {
+            await fetch("/api/agent/logout", { method: "POST" });
+            window.location.href = "/agent/login";
+        }
+
+        (async function init() {
+            await loadAgentInfo();
+            await loadDashboard();
+            setInterval(loadDashboard, 15000);
+        })();
+    </script>
+</body>
+</html>

@@ -8,3 +8,10 @@ sessions.json
 histories/
 index/
 *.npy
+ecommerce.db
+ecommerce.db-journal
+*.db
+ssl/
+*.pem
+*.key
+logs/

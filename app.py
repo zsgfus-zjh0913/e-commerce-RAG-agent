@@ -18,10 +18,26 @@ from functools import wraps
 from rag_engine import RAGEngine, SUPPORTED_EXTENSIONS
 from llm_client import LLMClient
 from auth_manager import AuthManager
+from database import init_db, get_db, close_db, Ticket, Order, Product
+from security import (
+    apply_security_headers, sanitize_input, is_malicious_input,
+    rate_limit, validate_file_upload,
+)
+from agent_routes import agent_bp
+import logger
+
+init_db()
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024
-app.secret_key = os.environ.get("SECRET_KEY", "ecommerce-cs-secret-2026")
+app.secret_key = os.environ.get("SECRET_KEY", os.environ.get("JWT_SECRET", "ecommerce-cs-secret-2026"))
+app.register_blueprint(agent_bp)
+
+
+@app.after_request
+def after_request(response):
+    apply_security_headers(response)
+    return response
 
 BASE_DIR = Path(__file__).parent
 DATA_DIR = BASE_DIR / "data"
@@ -143,6 +159,142 @@ def _is_product_listing_query(question):
     return any(p in q for p in patterns)
 
 
+# ── 退款/转人工意图检测 ─────────────────────────────────
+
+REFUND_PATTERNS = [
+    "退款", "退钱", "申请退款", "我要退款", "退还货款",
+    "退款申请", "帮我退款", "退货退款", "想要退款",
+]
+
+HUMAN_AGENT_PATTERNS = [
+    "转人工", "人工客服", "找人工", "转接人工", "我要人工",
+    "转接客服", "找人工客服", "接通人工", "人工服务",
+    "转真人", "真人客服", "找客服", "接人工",
+]
+
+
+def _is_refund_intent(question):
+    q = question.lower()
+    return any(p in q for p in REFUND_PATTERNS)
+
+
+def _is_human_agent_intent(question):
+    q = question.lower()
+    return any(p in q for p in HUMAN_AGENT_PATTERNS)
+
+
+# ── 订单查询意图检测 ───────────────────────────────────
+
+ORDER_QUERY_PATTERNS = [
+    "我的订单", "订单状态", "订单查询", "查订单", "查一下订单",
+    "订单号", "物流状态", "快递单号", "发货了吗", "发货了没",
+    "到哪了", "什么时候到", "我的快递", "包裹状态",
+    "订单进度", "查看订单", "订单情况", "订单怎么样",
+]
+
+import re
+
+def _is_order_query(question):
+    q = question.lower()
+    if any(p in q for p in ORDER_QUERY_PATTERNS):
+        return True
+    if re.search(r'[A-Z]{2}\d{8,}', question.upper()):
+        return True
+    if re.search(r'订单.*\d{6,}', q) or re.search(r'\d{6,}.*订单', q):
+        return True
+    return False
+
+
+def _extract_order_id(question):
+    m = re.search(r'[A-Z]{2}\d{8,}', question.upper())
+    if m:
+        return m.group(0)
+    m = re.search(r'(?:订单|单号|编号)[号:：\s]*([A-Za-z0-9\-]{6,})', question)
+    if m:
+        return m.group(1)
+    return None
+
+
+def _query_orders(username, question):
+    """查询用户订单"""
+    db = get_db()
+    try:
+        order_id = _extract_order_id(question)
+
+        if order_id:
+            orders = db.query(Order).filter(
+                Order.order_id == order_id,
+                Order.customer_username == username,
+            ).all()
+        else:
+            orders = db.query(Order).filter(
+                Order.customer_username == username,
+            ).order_by(Order.created_at.desc()).all()
+
+        if not orders:
+            return None, "未找到您的订单信息。如果您有具体订单号，请提供以便精确查询。"
+
+        status_map = {
+            "pending": "待付款",
+            "paid": "已付款",
+            "shipped": "已发货",
+            "delivered": "已签收",
+            "refunded": "已退款",
+            "cancelled": "已取消",
+        }
+
+        if order_id:
+            order = orders[0]
+            parts = [
+                f"订单号：{order.order_id}",
+                f"商品：{order.product_name}",
+                f"数量：{order.quantity}",
+                f"金额：{order.amount}元",
+                f"状态：{status_map.get(order.status, order.status)}",
+            ]
+            if order.tracking_number:
+                parts.append(f"快递单号：{order.tracking_number}")
+            if order.shipping_address:
+                parts.append(f"收货地址：{order.shipping_address}")
+            return [order.to_dict()], "；".join(parts)
+        else:
+            lines = [f"您共有 {len(orders)} 个订单："]
+            for o in orders:
+                s = status_map.get(o.status, o.status)
+                lines.append(f"• {o.order_id} | {o.product_name} ×{o.quantity} | {o.amount}元 | {s}")
+            return [o.to_dict() for o in orders], "\n".join(lines)
+    except Exception as e:
+        return None, f"订单查询失败: {e}"
+    finally:
+        close_db(db)
+
+
+def _create_ticket(username, ticket_type, subject, description="", order_id=""):
+    ticket_id = f"TK-{int(time.time())}{uuid.uuid4().hex[:4].upper()}"
+    now = int(time.time())
+    db = get_db()
+    try:
+        ticket = Ticket(
+            ticket_id=ticket_id,
+            username=username,
+            ticket_type=ticket_type,
+            subject=subject,
+            description=description,
+            order_id=order_id,
+            status="pending",
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(ticket)
+        db.commit()
+        return ticket.to_dict()
+    except Exception as e:
+        db.rollback()
+        return None
+    finally:
+        close_db(db)
+
+
 # ── API Key 持久化 ──────────────────────────────────────
 
 def load_config():
@@ -255,9 +407,10 @@ def login_page():
 # ── 认证 API ────────────────────────────────────────────
 
 @app.route("/api/register", methods=["POST"])
+@rate_limit(max_requests=5, window=60, is_auth=True)
 def api_register():
     data = request.get_json(silent=True) or {}
-    username = data.get("username", "")
+    username = sanitize_input(data.get("username", ""), max_length=50)
     password = data.get("password", "")
     gender = data.get("gender", "")
     result = auth.register(username, password, gender)
@@ -265,20 +418,21 @@ def api_register():
         login_result = auth.login(username, password)
         if login_result["success"]:
             resp = jsonify(login_result)
-            resp.set_cookie("auth_token", login_result["token"], httponly=True, max_age=86400)
+            resp.set_cookie("auth_token", login_result["token"], httponly=True, max_age=86400, samesite="Strict")
             return resp
     return jsonify(result)
 
 
 @app.route("/api/login", methods=["POST"])
+@rate_limit(max_requests=5, window=60, is_auth=True)
 def api_login():
     data = request.get_json(silent=True) or {}
-    username = data.get("username", "")
+    username = sanitize_input(data.get("username", ""), max_length=50)
     password = data.get("password", "")
     result = auth.login(username, password)
     if result["success"]:
         resp = jsonify(result)
-        resp.set_cookie("auth_token", result["token"], httponly=True, max_age=86400)
+        resp.set_cookie("auth_token", result["token"], httponly=True, max_age=86400, samesite="Strict")
         return resp
     return jsonify(result)
 
@@ -347,10 +501,11 @@ def api_settings():
 
 @app.route("/api/query", methods=["POST"])
 @login_required
+@rate_limit(max_requests=30, window=60)
 def api_query():
     global api_key
     data = request.get_json(silent=True) or {}
-    question = (data.get("question") or "").strip()
+    question = sanitize_input(data.get("question", ""), max_length=2000)
     top_k = data.get("top_k", 5)
     session_id = data.get("session_id", "")
     conv_id = data.get("conversation_id", "")
@@ -358,6 +513,9 @@ def api_query():
 
     if not question:
         return jsonify({"error": "问题不能为空"}), 400
+
+    if is_malicious_input(question):
+        return jsonify({"error": "输入包含不安全内容"}), 400
 
     history = []
     if session_id:
@@ -398,6 +556,86 @@ def api_query():
             save_conversation(username, conv_id, conv)
             _add_to_history(session_id, "user", question)
             _add_to_history(session_id, "assistant", answer)
+            yield f"data: {json.dumps({'type': 'conversation_id', 'data': conv_id}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
+            return
+
+        # ── 退款意图：创建工单，等待人工确认 ──
+        if _is_refund_intent(question):
+            ticket = _create_ticket(username, "refund", question[:200], question)
+            if ticket:
+                answer = (
+                    f"已为您创建退款申请工单（工单号：{ticket['ticket_id']}）。\n\n"
+                    f"退款流程说明：\n"
+                    f"1. 您的退款申请已提交，等待人工客服确认\n"
+                    f"2. 人工客服确认后，将自动为您处理退款\n"
+                    f"3. 退款将在 1-3 个工作日内原路退回\n\n"
+                    f"如需加快处理，请提供您的订单号。您也可以在侧边栏「我的工单」中查看进度。"
+                )
+            else:
+                answer = "退款申请提交失败，请稍后重试或联系人工客服。"
+            yield f"data: {json.dumps({'type': 'ticket', 'data': ticket}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sources', 'data': []}, ensure_ascii=False)}\n\n"
+            for i in range(0, len(answer), 20):
+                chunk = answer[i:i+20]
+                yield f"data: {json.dumps({'type': 'delta', 'data': chunk}, ensure_ascii=False)}\n\n"
+                time.sleep(0.03)
+            conv["messages"].append({"role": "user", "content": question})
+            conv["messages"].append({"role": "assistant", "content": answer})
+            conv["updated_at"] = time.time()
+            save_conversation(username, conv_id, conv)
+            _add_to_history(session_id, "user", question)
+            _add_to_history(session_id, "assistant", answer)
+            yield f"data: {json.dumps({'type': 'conversation_id', 'data': conv_id}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
+            return
+
+        # ── 转人工意图：创建工单，等待人工接入 ──
+        if _is_human_agent_intent(question):
+            ticket = _create_ticket(username, "human_agent", question[:200], question)
+            if ticket:
+                answer = (
+                    f"正在为您转接人工客服（工单号：{ticket['ticket_id']}）。\n\n"
+                    f"人工客服将尽快接入，请稍候...\n"
+                    f"在等待期间，您仍然可以继续向我提问，我会尽力为您解答。"
+                )
+            else:
+                answer = "转接人工客服失败，请稍后重试。"
+            yield f"data: {json.dumps({'type': 'ticket', 'data': ticket}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sources', 'data': []}, ensure_ascii=False)}\n\n"
+            for i in range(0, len(answer), 20):
+                chunk = answer[i:i+20]
+                yield f"data: {json.dumps({'type': 'delta', 'data': chunk}, ensure_ascii=False)}\n\n"
+                time.sleep(0.03)
+            conv["messages"].append({"role": "user", "content": question})
+            conv["messages"].append({"role": "assistant", "content": answer})
+            conv["updated_at"] = time.time()
+            save_conversation(username, conv_id, conv)
+            _add_to_history(session_id, "user", question)
+            _add_to_history(session_id, "assistant", answer)
+            yield f"data: {json.dumps({'type': 'conversation_id', 'data': conv_id}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
+            return
+
+        # ── 订单查询：查数据库，直接返回 ──
+        if _is_order_query(question):
+            orders, answer = _query_orders(username, question)
+            if orders:
+                sources = [{"source": "订单系统", "order_id": o.get("order_id", "")} for o in orders]
+            else:
+                sources = []
+            yield f"data: {json.dumps({'type': 'sources', 'data': sources}, ensure_ascii=False)}\n\n"
+            for i in range(0, len(answer), 20):
+                chunk = answer[i:i+20]
+                yield f"data: {json.dumps({'type': 'delta', 'data': chunk}, ensure_ascii=False)}\n\n"
+                time.sleep(0.03)
+            conv["messages"].append({"role": "user", "content": question})
+            conv["messages"].append({"role": "assistant", "content": answer})
+            conv["updated_at"] = time.time()
+            save_conversation(username, conv_id, conv)
+            _add_to_history(session_id, "user", question)
+            _add_to_history(session_id, "assistant", answer)
+            logger.audit("user", username, "order_query", "order", "", f"查询: {question[:100]}")
             yield f"data: {json.dumps({'type': 'conversation_id', 'data': conv_id}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
             return
@@ -563,6 +801,7 @@ def api_history_create():
 
 @app.route("/api/upload", methods=["POST"])
 @login_required
+@rate_limit(max_requests=10, window=60)
 def api_upload():
     if "file" not in request.files:
         return jsonify({"error": "未检测到上传文件"}), 400
@@ -571,12 +810,11 @@ def api_upload():
     if not file.filename:
         return jsonify({"error": "文件名为空"}), 400
 
-    ext = Path(file.filename).suffix.lower()
-    if ext not in SUPPORTED_EXTENSIONS:
-        return jsonify({
-            "error": f"不支持的文件类型 {ext}，支持 {', '.join(sorted(SUPPORTED_EXTENSIONS))}"
-        }), 400
+    ok, msg = validate_file_upload(file.filename, len(file.read()), SUPPORTED_EXTENSIONS)
+    if not ok:
+        return jsonify({"error": msg}), 400
 
+    file.seek(0)
     content = file.read()
     name = rag.add_document(file.filename, content)
 
@@ -595,9 +833,10 @@ def api_documents():
 
 @app.route("/api/delete", methods=["POST"])
 @login_required
+@rate_limit(max_requests=10, window=60)
 def api_delete():
     data = request.get_json(silent=True) or {}
-    filename = (data.get("filename") or "").strip()
+    filename = sanitize_input(data.get("filename", ""), max_length=200)
 
     if not filename:
         return jsonify({"error": "文件名不能为空"}), 400
@@ -620,6 +859,102 @@ def api_stats():
     return jsonify(rag.get_stats())
 
 
+# ── 工单 API ────────────────────────────────────────────
+
+@app.route("/api/ticket/list", methods=["GET"])
+@login_required
+def api_ticket_list():
+    username = request.user["username"]
+    db = get_db()
+    try:
+        tickets = db.query(Ticket).filter(
+            Ticket.username == username
+        ).order_by(Ticket.created_at.desc()).all()
+        return jsonify({"tickets": [t.to_dict() for t in tickets]})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        close_db(db)
+
+
+@app.route("/api/ticket/create", methods=["POST"])
+@login_required
+@rate_limit(max_requests=5, window=60)
+def api_ticket_create():
+    username = request.user["username"]
+    data = request.get_json(silent=True) or {}
+    ticket_type = data.get("ticket_type", "")
+    subject = sanitize_input(data.get("subject", ""), max_length=200)
+    description = sanitize_input(data.get("description", ""), max_length=2000)
+    order_id = sanitize_input(data.get("order_id", ""), max_length=50)
+
+    if ticket_type not in ("refund", "human_agent"):
+        return jsonify({"error": "工单类型无效"}), 400
+    if not subject:
+        return jsonify({"error": "标题不能为空"}), 400
+
+    ticket = _create_ticket(username, ticket_type, subject, description, order_id)
+    if ticket:
+        return jsonify({"success": True, "ticket": ticket})
+    return jsonify({"error": "创建工单失败"}), 500
+
+
+@app.route("/api/ticket/<ticket_id>", methods=["GET"])
+@login_required
+def api_ticket_get(ticket_id):
+    username = request.user["username"]
+    db = get_db()
+    try:
+        ticket = db.query(Ticket).filter(
+            Ticket.ticket_id == ticket_id,
+            Ticket.username == username,
+        ).first()
+        if ticket:
+            return jsonify(ticket.to_dict())
+        return jsonify({"error": "工单不存在"}), 404
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        close_db(db)
+
+
+@app.route("/api/ticket/<ticket_id>/process", methods=["POST"])
+@login_required
+def api_ticket_process(ticket_id):
+    username = request.user["username"]
+    data = request.get_json(silent=True) or {}
+    action = data.get("action", "")
+    reply = sanitize_input(data.get("reply", ""), max_length=1000)
+
+    if action not in ("approve", "reject", "resolve"):
+        return jsonify({"error": "操作类型无效"}), 400
+
+    db = get_db()
+    try:
+        ticket = db.query(Ticket).filter(
+            Ticket.ticket_id == ticket_id,
+            Ticket.username == username,
+        ).first()
+        if not ticket:
+            return jsonify({"error": "工单不存在"}), 404
+
+        status_map = {
+            "approve": "approved",
+            "reject": "rejected",
+            "resolve": "resolved",
+        }
+        ticket.status = status_map[action]
+        ticket.agent_reply = reply
+        ticket.updated_at = int(time.time())
+        db.commit()
+        return jsonify({"success": True, "ticket": ticket.to_dict()})
+    except Exception as e:
+        db.rollback()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        close_db(db)
+
+
 @app.route("/api/download/<filename>", methods=["GET"])
 @login_required
 def api_download(filename):
@@ -637,13 +972,15 @@ def health():
 
 
 if __name__ == "__main__":
-    print("=" * 50)
-    print("  电商智能客服系统")
+    print("=" * 55)
+    print("  电商智能客服系统 (生产加固版)")
     print(f"  数据目录: {DATA_DIR}")
     print(f"  索引目录: {INDEX_DIR}")
+    print(f"  数据库: ecommerce.db (SQLite + bcrypt + JWT)")
+    print(f"  安全: 安全头/限流/输入消毒/恶意检测/文件验证")
     print(f"  引擎状态: {rag.get_stats()}")
     print(f"  LLM 模型: {LLMClient.MODEL}")
     print(f"  LLM 状态: {'已启用' if api_key else '未启用（离线 RAG 检索模式）'}")
     print("  访问地址: http://127.0.0.1:5000")
-    print("=" * 50)
+    print("=" * 55)
     app.run(host="0.0.0.0", port=5000, debug=True, use_reloader=False)

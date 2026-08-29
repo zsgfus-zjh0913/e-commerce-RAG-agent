@@ -1,61 +1,81 @@
-import json
-import hashlib
-import secrets
+import os
 import time
-from pathlib import Path
+import uuid
+import jwt
+import bcrypt
+from datetime import datetime, timedelta, timezone
 
-USERS_FILE = Path(__file__).parent / "users.json"
-SESSIONS_FILE = Path(__file__).parent / "sessions.json"
+from database import init_db, get_db, close_db, User, Session
 
+init_db()
 
-def _hash_password(password, salt=None):
-    if salt is None:
-        salt = secrets.token_hex(16)
-    hashed = hashlib.sha256((salt + password).encode()).hexdigest()
-    return salt, hashed
-
-
-def _load_users():
-    if USERS_FILE.exists():
-        try:
-            return json.loads(USERS_FILE.read_text(encoding="utf-8"))
-        except Exception:
-            pass
-    return {}
-
-
-def _save_users(users):
-    try:
-        USERS_FILE.write_text(
-            json.dumps(users, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-    except Exception as e:
-        print(f"[Auth] 保存用户失败: {e}")
-
-
-def _load_sessions():
-    if SESSIONS_FILE.exists():
-        try:
-            return json.loads(SESSIONS_FILE.read_text(encoding="utf-8"))
-        except Exception:
-            pass
-    return {}
-
-
-def _save_sessions(sessions):
-    try:
-        SESSIONS_FILE.write_text(
-            json.dumps(sessions, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-    except Exception as e:
-        print(f"[Auth] 保存会话失败: {e}")
+JWT_SECRET = os.environ.get("JWT_SECRET", "ecommerce-cs-jwt-secret-2026")
+JWT_ALGORITHM = "HS256"
+JWT_TTL_HOURS = 24
+BLACKLIST_CLEANUP_THRESHOLD = 86400
 
 
 class AuthManager:
 
     def __init__(self):
-        self.users = _load_users()
-        self.sessions = _load_sessions()
+        self._cleanup_blacklist()
+
+    @staticmethod
+    def _hash_password(password: str) -> str:
+        salt = bcrypt.gensalt(rounds=12)
+        hashed = bcrypt.hashpw(password.encode("utf-8"), salt)
+        return hashed.decode("utf-8")
+
+    @staticmethod
+    def _verify_password(password: str, password_hash: str) -> bool:
+        try:
+            return bcrypt.checkpw(
+                password.encode("utf-8"),
+                password_hash.encode("utf-8"),
+            )
+        except Exception:
+            return False
+
+    @staticmethod
+    def _create_jwt(username, gender):
+        now = datetime.now(timezone.utc)
+        payload = {
+            "sub": username,
+            "gender": gender,
+            "jti": uuid.uuid4().hex,
+            "iat": now,
+            "exp": now + timedelta(hours=JWT_TTL_HOURS),
+        }
+        return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+    @staticmethod
+    def _decode_jwt(token):
+        try:
+            return jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        except jwt.ExpiredSignatureError:
+            return None
+        except jwt.InvalidTokenError:
+            return None
+
+    def _cleanup_blacklist(self):
+        db = get_db()
+        try:
+            cutoff = int(time.time()) - BLACKLIST_CLEANUP_THRESHOLD
+            db.query(Session).filter(Session.login_at < cutoff).delete()
+            db.commit()
+        except Exception:
+            db.rollback()
+        finally:
+            close_db(db)
+
+    def _is_blacklisted(self, jti):
+        db = get_db()
+        try:
+            return db.query(Session).filter(Session.token == jti).first() is not None
+        except Exception:
+            return False
+        finally:
+            close_db(db)
 
     def register(self, username, password, gender):
         username = username.strip()
@@ -67,62 +87,96 @@ class AuthManager:
             return {"success": False, "message": "密码至少4个字符"}
         if gender not in ("male", "female"):
             return {"success": False, "message": "请选择性别"}
-        if username in self.users:
-            return {"success": False, "message": "用户名已存在"}
 
-        salt, hashed = _hash_password(password)
-        self.users[username] = {
-            "username": username,
-            "salt": salt,
-            "password": hashed,
-            "gender": gender,
-            "created_at": time.time(),
-        }
-        _save_users(self.users)
-        return {"success": True, "message": "注册成功", "username": username}
+        db = get_db()
+        try:
+            existing = db.query(User).filter(User.username == username).first()
+            if existing:
+                return {"success": False, "message": "用户名已存在"}
+
+            user = User(
+                username=username,
+                password_hash=self._hash_password(password),
+                gender=gender,
+                created_at=int(time.time()),
+            )
+            db.add(user)
+            db.commit()
+            return {"success": True, "message": "注册成功", "username": username}
+        except Exception as e:
+            db.rollback()
+            return {"success": False, "message": f"注册失败: {e}"}
+        finally:
+            close_db(db)
 
     def login(self, username, password):
         username = username.strip()
-        if username not in self.users:
-            return {"success": False, "message": "用户名不存在"}
+        db = get_db()
+        try:
+            user = db.query(User).filter(User.username == username).first()
+            if not user:
+                return {"success": False, "message": "用户名不存在"}
 
-        user = self.users[username]
-        salt = user["salt"]
-        _, hashed = _hash_password(password, salt)
-        if hashed != user["password"]:
-            return {"success": False, "message": "密码错误"}
+            if not self._verify_password(password, user.password_hash):
+                return {"success": False, "message": "密码错误"}
 
-        token = secrets.token_hex(32)
-        self.sessions[token] = {
-            "username": username,
-            "gender": user["gender"],
-            "login_at": time.time(),
-        }
-        _save_sessions(self.sessions)
-        return {
-            "success": True,
-            "message": "登录成功",
-            "token": token,
-            "username": username,
-            "gender": user["gender"],
-        }
+            token = self._create_jwt(username, user.gender)
+            return {
+                "success": True,
+                "message": "登录成功",
+                "token": token,
+                "username": username,
+                "gender": user.gender,
+            }
+        except Exception as e:
+            return {"success": False, "message": f"登录失败: {e}"}
+        finally:
+            close_db(db)
 
     def validate(self, token):
         if not token:
             return None
-        self.sessions = _load_sessions()
-        if token not in self.sessions:
+
+        payload = self._decode_jwt(token)
+        if not payload:
             return None
-        session = self.sessions[token]
-        if time.time() - session["login_at"] > 86400:
-            del self.sessions[token]
-            _save_sessions(self.sessions)
+
+        if self._is_blacklisted(payload.get("jti", "")):
             return None
-        return session
+
+        iat = payload.get("iat", time.time())
+        if hasattr(iat, "timestamp"):
+            iat = int(iat.timestamp())
+        else:
+            iat = int(iat)
+
+        return {
+            "username": payload.get("sub", ""),
+            "gender": payload.get("gender", ""),
+            "login_at": iat,
+        }
 
     def logout(self, token):
-        self.sessions = _load_sessions()
-        if token in self.sessions:
-            del self.sessions[token]
-            _save_sessions(self.sessions)
-        return {"success": True, "message": "已退出登录"}
+        payload = self._decode_jwt(token)
+        if not payload:
+            return {"success": True, "message": "已退出登录"}
+
+        jti = payload.get("jti", "")
+        db = get_db()
+        try:
+            existing = db.query(Session).filter(Session.token == jti).first()
+            if not existing:
+                entry = Session(
+                    token=jti,
+                    username=payload.get("sub", ""),
+                    gender=payload.get("gender", ""),
+                    login_at=int(time.time()),
+                )
+                db.add(entry)
+                db.commit()
+            return {"success": True, "message": "已退出登录"}
+        except Exception:
+            db.rollback()
+            return {"success": True, "message": "已退出登录"}
+        finally:
+            close_db(db)

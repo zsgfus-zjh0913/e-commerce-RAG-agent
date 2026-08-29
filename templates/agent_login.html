@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>坐席工作台 · 登录</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <style>
+        body { margin: 0; }
+        .agent-login-body {
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+        }
+        .agent-login-card {
+            background: rgba(255,255,255,0.95);
+            border-radius: 20px;
+            padding: 40px 36px;
+            width: 400px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+        .agent-login-header { text-align: center; margin-bottom: 30px; }
+        .agent-login-header h1 { font-size: 22px; font-weight: 800; color: #1a1a2e; margin-bottom: 6px; }
+        .agent-login-header p { font-size: 13px; color: #718096; }
+        .agent-login-form { display: flex; flex-direction: column; gap: 14px; }
+        .agent-form-group { display: flex; flex-direction: column; gap: 6px; }
+        .agent-form-group label { font-size: 13px; font-weight: 600; color: #4A5568; }
+        .agent-form-group input {
+            padding: 12px 16px; border: 2px solid rgba(0,0,0,0.08); border-radius: 10px;
+            font-size: 14px; outline: none; transition: all 0.3s; background: rgba(255,255,255,0.8);
+        }
+        .agent-form-group input:focus { border-color: #0f3460; box-shadow: 0 0 0 4px rgba(15,52,96,0.1); }
+        .agent-submit {
+            padding: 14px; background: linear-gradient(135deg, #0f3460 0%, #1a1a2e 100%);
+            color: white; border: none; border-radius: 10px; font-size: 15px;
+            font-weight: 700; cursor: pointer; transition: all 0.3s; margin-top: 6px;
+        }
+        .agent-submit:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(15,52,96,0.3); }
+        .agent-submit:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
+        .agent-message { text-align: center; font-size: 13px; margin-top: 12px; min-height: 20px; }
+        .agent-message.error { color: #e53e3e; }
+        .agent-footer { text-align: center; margin-top: 20px; font-size: 12px; }
+        .agent-footer a { color: #0f3460; text-decoration: none; }
+        .demo-info {
+            margin-top: 20px; padding: 12px; background: rgba(15,52,96,0.05);
+            border-radius: 8px; font-size: 12px; color: #718096; line-height: 1.8;
+        }
+        .demo-info b { color: #0f3460; }
+    </style>
+</head>
+<body class="agent-login-body">
+    <div class="agent-login-card">
+        <div class="agent-login-header">
+            <h1>客服坐席工作台</h1>
+            <p>人工客服登录入口</p>
+        </div>
+        <form class="agent-login-form" onsubmit="return login(event)">
+            <div class="agent-form-group">
+                <label>坐席账号</label>
+                <input type="text" id="username" placeholder="输入坐席账号..." autocomplete="off" required>
+            </div>
+            <div class="agent-form-group">
+                <label>密码</label>
+                <input type="password" id="password" placeholder="输入密码..." required>
+            </div>
+            <button type="submit" class="agent-submit" id="login-btn">登录工作台</button>
+        </form>
+        <div id="message" class="agent-message"></div>
+        <div class="demo-info">
+            <b>演示账号：</b><br>
+            agent001 / agent123（客服小王）<br>
+            agent002 / agent456（客服小李）<br>
+            admin / admin123（管理员）
+        </div>
+        <div class="agent-footer">
+            <a href="/login">返回用户端</a>
+        </div>
+    </div>
+    <script>
+        async function login(e) {
+            e.preventDefault();
+            const btn = document.getElementById("login-btn");
+            const msg = document.getElementById("message");
+            btn.disabled = true;
+            btn.textContent = "登录中...";
+            msg.className = "agent-message";
+            msg.textContent = "";
+
+            try {
+                const res = await fetch("/api/agent/login", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        username: document.getElementById("username").value.trim(),
+                        password: document.getElementById("password").value,
+                    }),
+                });
+                const data = await res.json();
+                if (res.ok && data.success) {
+                    msg.className = "agent-message success";
+                    msg.textContent = "登录成功，正在跳转...";
+                    setTimeout(() => window.location.href = "/agent/dashboard", 500);
+                } else {
+                    msg.className = "agent-message error";
+                    msg.textContent = data.error || "登录失败";
+                }
+            } catch (err) {
+                msg.className = "agent-message error";
+                msg.textContent = "网络错误: " + err.message;
+            } finally {
+                btn.disabled = false;
+                btn.textContent = "登录工作台";
+            }
+            return false;
+        }
+    </script>
+</body>
+</html>
