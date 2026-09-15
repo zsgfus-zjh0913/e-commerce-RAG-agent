@@ -429,8 +429,17 @@ class ProductMultimodalEngine:
             if len(token.strip()) >= 2
         }
 
-    def search(self, image, question="", top_k=3, min_score=0.20):
+    def search(self, image, question="", top_k=3, min_score=0.60):
         self.ensure_catalog_index()
+        # 如果没有加载 CLIP 模型（fallback 模式），图片特征和文本特征维度不兼容，
+        # 强行匹配只会产生随机噪声，直接返回空结果。
+        if self.vector_provider == "fallback":
+            return {
+                "ocr": [],
+                "ocr_text": "",
+                "results": [],
+                "provider": "fallback",
+            }
         if not self.product_ids:
             return {
                 "ocr": [],

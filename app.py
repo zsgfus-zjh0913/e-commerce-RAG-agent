@@ -1187,7 +1187,8 @@ def api_query_image():
     analysis = multimodal.search(image, question=question, top_k=3)
     ocr_text = analysis.get("ocr_text", "")
     raw_matches = analysis.get("results", [])
-    min_score = float(os.environ.get("MULTIMODAL_MIN_SCORE", "0.15"))
+    # 提高匹配门槛至 0.60，低于此分数的候选直接丢弃，宁缺毋滥
+    min_score = float(os.environ.get("MULTIMODAL_MIN_SCORE", "0.60"))
     raw_matches = [
         item for item in raw_matches if item.get("final_score", 0) >= min_score
     ]
@@ -1292,12 +1293,11 @@ def api_query_image():
                 if len(product_matches) > 1
                 else 0
             )
+            # 移除 exact_match 捷径，完全依赖分数。
+            # 只要分数 >= 0.60 且与第二名拉开差距，才认为是高置信度。
             high_confidence = (
-                top.get("exact_match")
-                or (
-                    top.get("final_score", 0) >= 0.8
-                    and top.get("final_score", 0) - second_score >= 0.15
-                )
+                top.get("final_score", 0) >= 0.60
+                and top.get("final_score", 0) - second_score >= 0.15
             )
 
         if high_confidence:
@@ -1317,11 +1317,19 @@ def api_query_image():
             )
 
             if product_matches:
+                top_score = product_matches[0].get("final_score", 0)
+                # 根据分数给大模型明确的指示：分数低时允许它说“认不出来”
+                if top_score < 0.7:
+                    confidence_hint = "（系统匹配置信度较低。如果图片内容与候选商品明显不符，请直接告知用户无法识别，不要强行介绍。）"
+                else:
+                    confidence_hint = "（系统匹配置信度较高，请依据候选商品回答。）"
+
                 prompt = (
                     "用户上传了一张商品图片。\n"
                     f"OCR 识别文字：{ocr_text or '无'}\n"
                     f"系统图片检索候选：{match_summary}\n"
                     f"用户问题：{question or '请识别图片中的商品并介绍相关信息。'}\n"
+                    f"置信度提示：{confidence_hint}\n"
                     "请优先依据系统图片检索候选回答，不要编造候选列表中不存在的商品信息。"
                 )
             else:
