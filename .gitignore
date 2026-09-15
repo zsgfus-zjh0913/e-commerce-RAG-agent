@@ -15,3 +15,5 @@ ssl/
 *.pem
 *.key
 logs/
+db_data/
+redis_data/

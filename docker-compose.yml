@@ -9,11 +9,40 @@ services:
       - ./data:/app/data
       - ./histories:/app/histories
       - ./index:/app/index
-      - ./ecommerce.db:/app/ecommerce.db
+      - ./logs:/app/logs
     environment:
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      - DEEPSEEK_BASE_URL=${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      - DEEPSEEK_MODEL=${DEEPSEEK_MODEL:-deepseek-chat}
+      - DATABASE_URL=mysql+pymysql://ecommerce:${DB_PASSWORD:-change-me}@db:3306/ecommerce?charset=utf8mb4
+      - REDIS_URL=redis://redis:6379/0
       - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
+    depends_on:
+      - db
+      - redis
     restart: unless-stopped
+
+  db:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-root-password}
+      MYSQL_DATABASE: ecommerce
+      MYSQL_USER: ecommerce
+      MYSQL_PASSWORD: ${DB_PASSWORD:-change-me}
+    volumes:
+      - db_data:/var/lib/mysql
+    ports:
+      - "3306:3306"
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
 
   nginx:
     image: nginx:alpine
@@ -27,3 +56,7 @@ services:
     depends_on:
       - app
     restart: unless-stopped
+
+volumes:
+  db_data:
+  redis_data:

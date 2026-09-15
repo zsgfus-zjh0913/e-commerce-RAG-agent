@@ -11,8 +11,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-RUN python -c "import database; database.init_db()" || true
-
 EXPOSE 5000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD python -c "import requests; requests.get('http://localhost:5000/health', timeout=3)" || exit 1
 
 CMD ["gunicorn", "-c", "gunicorn_config.py", "app:app"]

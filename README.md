@@ -8,10 +8,29 @@
 - **Query 改写** — 用户输入后，大模型先改写优化用户问题，再进行检索和回答
 - **离线 RAG 检索** — 未配置 API Key 时自动切换为离线 RAG 检索模式
 - **多格式文档上传** — 支持 .txt .md .csv .json .docx .pdf .xlsx .pptx .html
+- **商品图片识别** — 上传实拍图后通过 PaddleOCR + 中文 CLIP 检索相似商品，并结合商品文本 RAG 回答材质、尺码、型号和价格
 - **历史记录** — 侧边栏展示对话历史，可点击恢复、删除
 - **可收起侧边栏** — 侧边栏可收起/展开，适配桌面和移动端
 - **流式回答** — SSE 流式输出，实时显示改写查询和回答内容
 - **商品客服** — 商品信息查询、更换商品、退换货处理、物流咨询
+- **实时业务查询（Function Calling）** — 订单/物流/售后工单进度/实时库存走 LLM 工具调用直查业务库，不再依赖知识库陈旧数据
+
+## 实时业务查询（Function Calling）流程
+
+用户问「订单/快递/售后进度/库存」类问题时，链路如下：
+
+1. 关键词门控判定疑似业务数据问题（避免普通问答产生额外 LLM 调用）
+2. LLM 携带工具定义决策：是否需要调用工具、抽取参数
+3. 执行工具查询业务库（账号由服务端绑定，用户无法越权查他人数据）
+4. LLM 基于工具返回的实时数据生成回答并流式返回
+
+- 无 API Key 或 LLM 不可用时自动降级为确定性查询（直接查库拼文本）。
+- 知识型问题（政策/尺码/介绍）不会触发业务工具，仍走 RAG 链路。
+- **接入真实业务系统**：只需在 `business_tools.py` 中改写 4 个执行器
+  （`_exec_orders / _exec_logistics / _exec_after_sales / _exec_product`）的查询来源，
+  将其指向真实业务库的表或内部 API 即可，工具 schema 与上层链路无需改动。
+- Function Calling 需要模型支持 `tools` 参数（DeepSeek `deepseek-chat` 支持；
+  若走其他 OpenAI 兼容网关，请确认其支持函数调用）。
 
 ## 技术架构
 
@@ -67,14 +86,15 @@
 电商智能客服/
 ├── app.py              # Flask 主程序
 ├── rag_engine.py       # RAG 混合检索引擎
-├── llm_client.py       # LLM 客户端（含 Query 改写）
+├── llm_client.py       # LLM 客户端（Query 改写 + Function Calling）
+├── business_tools.py   # 业务数据工具层（订单/物流/售后/库存，接入真实业务库的适配点）
 ├── auth_manager.py     # 用户认证管理
 ├── requirements.txt    # 依赖
 ├── config.json         # API Key 配置
 ├── .env               # 环境变量
 ├── data/              # 知识库文档
 │   ├── faq.txt
-│   ├── products.json
+│   ├── 商品信息.md
 │   ├── shipping_policy.md
 │   └── size_chart.csv
 ├── index/             # RAG 索引（自动生成）

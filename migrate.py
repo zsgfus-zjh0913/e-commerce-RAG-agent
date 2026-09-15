@@ -53,25 +53,45 @@ def migrate_users():
 
 
 def migrate_products():
-    products_file = DATA_DIR / "products.json"
+    products_file = DATA_DIR / "商品信息.md"
     if not products_file.exists():
-        print("[migrate] 无 products.json，跳过商品迁移")
+        print("[migrate] 无 商品信息.md，跳过商品迁移")
         return 0
 
-    products = json.loads(products_file.read_text(encoding="utf-8"))
+    text = products_file.read_text(encoding="utf-8")
+    products = []
+    for block in re.split(r"(?=^### )", text, flags=re.MULTILINE):
+        product = {}
+        for line in block.splitlines():
+            match = re.match(r"^- ([^：]+)：(.*)$", line.strip())
+            if match:
+                product[match.group(1).strip()] = match.group(2).strip()
+        if product.get("商品编号"):
+            products.append(product)
+
     db = get_db()
-    count = 0
+    added = 0
+    updated = 0
     try:
         for p in products:
             product_id = p.get("商品编号", "")
             if not product_id:
                 continue
-            existing = db.query(Product).filter(Product.product_id == product_id).first()
-            if existing:
-                continue
-
             exclude_keys = {"商品编号", "商品名称", "品牌", "分类", "价格", "商品描述", "库存"}
             attributes = {k: v for k, v in p.items() if k not in exclude_keys and v}
+            existing = db.query(Product).filter(Product.product_id == product_id).first()
+            if existing:
+                existing.name = p.get("商品名称", "")
+                existing.brand = p.get("品牌", "")
+                existing.category = p.get("分类", "")
+                existing.price = p.get("价格", "")
+                existing.description = p.get("商品描述", "")
+                existing.stock = p.get("库存", "")
+                existing.attributes = json.dumps(attributes, ensure_ascii=False)
+                existing.updated_at = int(time.time())
+                existing.version = (existing.version or 1) + 1
+                updated += 1
+                continue
 
             product = Product(
                 product_id=product_id,
@@ -83,17 +103,18 @@ def migrate_products():
                 stock=p.get("库存", ""),
                 attributes=json.dumps(attributes, ensure_ascii=False),
                 created_at=int(time.time()),
+                updated_at=int(time.time()),
             )
             db.add(product)
-            count += 1
+            added += 1
         db.commit()
-        print(f"[migrate] 商品迁移完成: {count} 条")
+        print(f"[migrate] 商品同步完成: 新增 {added} 条，更新 {updated} 条")
     except Exception as e:
         db.rollback()
         print(f"[migrate] 商品迁移失败: {e}")
     finally:
         close_db(db)
-    return count
+    return added + updated
 
 
 def migrate_faq():

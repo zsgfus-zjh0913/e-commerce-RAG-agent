@@ -26,9 +26,9 @@ class LLMClient:
     )
 
     ANSWER_SYSTEM_PROMPT = (
-        "你是「牛马」，一个专业的电商智能客服助手。\n\n"
+        "你是「暖小助」，一个专业的电商智能客服助手。\n\n"
         "【你的身份】\n"
-        "你是电商平台的客服助手，名叫「牛马」，头像是一头牛🐂。\n"
+        "你是电商平台的客服助手，名叫「暖小助」，头像是🌸。\n"
         "你的主要职责是为客户提供商品咨询和售后服务。\n\n"
         "【你的能力】\n"
         "1. 商品信息查询 — 查询商品详情、价格、尺码、库存、参数等\n"
@@ -37,7 +37,7 @@ class LLMClient:
         "4. 物流咨询 — 发货时间、运费、配送时效\n"
         "5. 尺码推荐 — 根据客户身材推荐合适尺码\n\n"
         "【回答规则】\n"
-        "1. 当用户询问「你是谁」「你叫什么」等身份问题时，介绍你是客服助手「牛马」及你的职责\n"
+        "1. 当用户询问「你是谁」「你叫什么」等身份问题时，介绍你是客服助手「暖小助」及你的职责\n"
         "2. 当用户询问「你能做什么」「你能为我做什么」等能力问题时，列出你的能力清单\n"
         "3. 当用户只是打招呼（你好、嗨等），简短问候并询问需要什么帮助\n"
         "4. 对于商品相关问题，优先依据下方知识库内容回答，不可编造不存在的商品信息\n"
@@ -49,7 +49,38 @@ class LLMClient:
         "10. 只回答用户问到的商品信息，不要把不相关的商品信息也列出来\n"
         "11. 这是多轮对话，用户的问题可能引用上文，请结合对话历史理解用户意图\n"
         "12. 使用中文回答\n\n"
+        "13. 用户询问有哪些商品时，使用“目前在售卖的产品有……”这种自然表达，"
+        "不要回复“当前知识库里关于商品的信息就这些”。\n\n"
         "知识库检索结果：\n{context}"
+    )
+
+    TOOLS_SYSTEM_PROMPT = (
+        "你是电商智能客服「暖小助」的业务调度助手，负责判断用户问题是否需要查询实时业务数据，"
+        "并选择正确的工具调用。\n\n"
+        "可调用工具：\n"
+        "- query_orders：查订单（列表/状态/金额）\n"
+        "- query_logistics：查物流发货信息（快递单号）\n"
+        "- query_after_sales：查售后/退款工单处理进度\n"
+        "- query_product：实时查商品库存/价格\n\n"
+        "规则：\n"
+        "1. 只有明显涉及「我的订单 / 快递物流 / 发货收货 / 退款售后进度 / 实时库存」"
+        "这类需要查业务系统的问题才调用工具\n"
+        "2. 商品介绍、购物政策、尺码等知识型问题**不要**调用任何工具\n"
+        "3. 用户没有给具体订单号时，可以省略 order_id 参数查询其最近订单\n"
+        "4. 绝对不要输出用户名相关参数，系统已绑定当前登录用户\n"
+        "5. 如果缺少关键信息（例如不知道要查哪个商品），直接输出一句需要向用户澄清的问题，"
+        "不要调用工具\n"
+        "6. 只输出必要的工具调用或澄清问题，不要多余解释\n"
+    )
+
+    TOOLS_ANSWER_SYSTEM_PROMPT = (
+        "你是电商智能客服「暖小助」🌸。你刚刚通过业务系统工具查询到了用户订单/物流/"
+        "售后/库存的**实时数据**，请据此回答用户的问题。\n\n"
+        "规则：\n"
+        "1. 只依据工具返回的数据作答，不得编造数据中不存在的信息（如没有快递单号就别说有）\n"
+        "2. 数据为空或未找到时如实说明，并给出下一步建议（提供订单号 / 联系人工客服等）\n"
+        "3. 若有多个订单/工单，分条列出，保持简洁清晰\n"
+        "4. 使用中文回答\n"
     )
 
     ERROR_TRANSLATIONS = {
@@ -69,8 +100,17 @@ class LLMClient:
                 return zh
         return error_msg
 
-    def _call_api(self, messages, stream=False, max_tokens=1024):
-        """调用 LLM API 的公共方法。"""
+    def _call_api(self, messages, stream=False, max_tokens=1024, tools=None):
+        """调用 LLM API 的公共方法（tools 非空时携带函数调用定义）。"""
+        payload = {
+            "model": self.MODEL,
+            "messages": messages,
+            "stream": stream,
+            "max_tokens": max_tokens,
+        }
+        if tools:
+            payload["tools"] = tools
+            payload.setdefault("tool_choice", "auto")
         try:
             response = requests.post(
                 f"{self.BASE_URL}/chat/completions",
@@ -78,12 +118,7 @@ class LLMClient:
                     "Content-Type": "application/json",
                     "Authorization": f"Bearer {self.api_key}",
                 },
-                json={
-                    "model": self.MODEL,
-                    "messages": messages,
-                    "stream": stream,
-                    "max_tokens": max_tokens,
-                },
+                json=payload,
                 stream=stream,
                 timeout=60,
             )
@@ -188,3 +223,102 @@ class LLMClient:
                     yield content
             except (json.JSONDecodeError, IndexError, KeyError):
                 continue
+
+    # ── Function Calling（业务工具调用）──────────────────────
+
+    @staticmethod
+    def _parse_content(result):
+        """从非流式响应中提取首个 message。返回 (message, error)。"""
+        if "error" in result:
+            return None, result["error"]
+        try:
+            msg = result["choices"][0]["message"]
+        except (KeyError, IndexError):
+            return None, "模型响应解析失败"
+        return msg, None
+
+    def decide_tools(self, question, history=None, tool_schemas=None):
+        """第一轮决策：携带工具定义询问模型是否需要调用业务工具。
+
+        返回 (decision, error)：
+          decision = {
+            "content": 模型直接输出的文本（可能为空），
+            "raw_message": 模型原始 message（供续聊时透传 tool_calls），
+            "tool_calls": [{"id", "name", "arguments"(dict), "raw"}...],
+          }
+        若 error 非空则 decision 为 None。
+        """
+        messages = [
+            {"role": "system", "content": self.TOOLS_SYSTEM_PROMPT},
+        ]
+        if history:
+            for msg in history[-4:]:
+                content = msg.get("content", "")
+                if len(content) > 400:
+                    content = content[:400] + "..."
+                messages.append({"role": msg["role"], "content": content})
+        messages.append({"role": "user", "content": question})
+
+        result = self._call_api(
+            messages, stream=False, max_tokens=512, tools=tool_schemas
+        )
+        msg, error = self._parse_content(result)
+        if error or msg is None:
+            return None, error
+
+        content = msg.get("content") or ""
+        calls = []
+        for raw in (msg.get("tool_calls") or []):
+            fn = raw.get("function") or {}
+            name = fn.get("name", "")
+            raw_args = fn.get("arguments") or ""
+            try:
+                arguments = json.loads(raw_args) if raw_args.strip() else {}
+            except Exception:
+                arguments = {"_parse_error": raw_args[:500]} if raw_args.strip() else {}
+            calls.append({
+                "id": raw.get("id", ""),
+                "name": name,
+                "arguments": arguments,
+                "raw": raw,
+            })
+        return {"content": content, "raw_message": msg, "tool_calls": calls}, None
+
+    def answer_with_tools(
+        self, question, history=None,
+        assistant_tool_message=None, tool_messages=None, max_tokens=1024,
+    ):
+        """工具执行完成后，生成最终回答（非流式，返回完整文本）。
+
+        参数：
+          assistant_tool_message: 决策轮返回的原始 assistant message（含 tool_calls），
+            按 OpenAI/DeepSeek 协议必须透传；
+          tool_messages: 每个工具的结果，{"role": "tool", "tool_call_id": id,
+            "content": json 字符串}。
+        返回 (text, error)。
+        """
+        messages = [
+            {"role": "system", "content": self.TOOLS_ANSWER_SYSTEM_PROMPT},
+        ]
+        if history:
+            for msg in history[-6:]:
+                content = msg.get("content", "")
+                if len(content) > 500:
+                    content = content[:500] + "..."
+                messages.append({"role": msg["role"], "content": content})
+        messages.append({"role": "user", "content": question})
+
+        if assistant_tool_message:
+            # 透传含 tool_calls 的 assistant 消息（content 置空字符串更稳妥）
+            passed = dict(assistant_tool_message)
+            passed["content"] = passed.get("content") or ""
+            messages.append(passed)
+        if tool_messages:
+            messages.extend(tool_messages)
+
+        result = self._call_api(messages, stream=False, max_tokens=max_tokens)
+        msg, error = self._parse_content(result)
+        if error or msg is None:
+            return None, error
+        text = (msg.get("content") or "").strip()
+        return text, None

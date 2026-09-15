@@ -14,3 +14,9 @@ accesslog = "-"
 errorlog = "-"
 loglevel = "info"
 proc_name = "ecommerce-cs"
+
+# 优雅重启
+graceful_timeout = 30
+
+# 日志格式
+access_log_format = '%(h)s %(l)s %(u)s %(t)s "%(r)s" %(s)s %(b)s "%(f)s" "%(a)s" %(L)s'

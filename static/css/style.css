@@ -323,6 +323,15 @@ body {
     border-color: rgba(91,143,229,0.15);
 }
 
+.ticket-card.clickable {
+    cursor: pointer;
+}
+
+.ticket-card.active {
+    border-color: var(--secondary);
+    box-shadow: 0 0 0 2px rgba(78,205,196,0.12);
+}
+
 .ticket-card-header {
     display: flex;
     justify-content: space-between;
@@ -379,6 +388,16 @@ body {
 .ticket-type-badge.human_agent {
     background: rgba(78,205,196,0.12);
     color: var(--secondary-dark);
+}
+
+.ticket-type-badge.exchange {
+    background: rgba(214,158,46,0.15);
+    color: #9c6b00;
+}
+
+.ticket-type-badge.after_sale {
+    background: rgba(128,90,213,0.12);
+    color: #6b46c1;
 }
 
 .ticket-subject {
@@ -776,6 +795,18 @@ body {
     flex-direction: row-reverse;
 }
 
+.message-image {
+    display: block;
+    max-width: 280px;
+    max-height: 320px;
+    width: auto;
+    height: auto;
+    object-fit: contain;
+    border-radius: 12px;
+    margin-bottom: 8px;
+    border: 1px solid var(--border);
+}
+
 .bot-message {
     align-self: flex-start;
 }
@@ -928,6 +959,48 @@ body {
     border-top: 1px solid var(--border);
 }
 
+.image-preview {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: fit-content;
+    max-width: 320px;
+    margin-bottom: 10px;
+    padding: 8px 10px;
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: var(--shadow-sm);
+}
+
+.image-preview img {
+    width: 42px;
+    height: 42px;
+    object-fit: cover;
+    border-radius: 8px;
+}
+
+.image-preview span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.image-preview button {
+    width: 24px;
+    height: 24px;
+    border: none;
+    border-radius: 50%;
+    background: rgba(0,0,0,0.06);
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 1;
+}
+
 .chat-input-wrapper {
     display: flex;
     gap: 10px;
@@ -937,6 +1010,30 @@ body {
     padding: 6px 6px 6px 20px;
     transition: var(--transition);
     box-shadow: var(--shadow-sm);
+}
+
+.image-upload-btn {
+    width: 38px;
+    height: 38px;
+    flex: 0 0 38px;
+    border: none;
+    border-radius: 50%;
+    background: rgba(91,143,229,0.09);
+    color: var(--primary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: var(--transition);
+}
+
+.image-upload-btn:hover {
+    background: rgba(91,143,229,0.16);
+}
+
+.image-upload-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
 }
 
 .chat-input-wrapper:focus-within {
@@ -1088,6 +1185,87 @@ body {
     justify-content: center;
     gap: 10px;
     margin-bottom: 8px;
+}
+
+/* ── 退款卡片 ── */
+.refund-card {
+    background: linear-gradient(135deg, #f8fafc 0%, #edf2f7 100%);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+    width: 100%;
+    max-width: 420px;
+}
+.refund-card-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text-main);
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+}
+.refund-order-item {
+    background: white;
+    border-radius: 8px;
+    padding: 12px;
+    margin-bottom: 10px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    justify-content: space-between;
+}
+.refund-order-info { flex: 1; }
+.refund-order-row {
+    display: flex;
+    gap: 8px;
+    font-size: 13px;
+    line-height: 1.8;
+}
+.refund-label {
+    color: var(--text-secondary);
+    min-width: 48px;
+    font-weight: 500;
+}
+.refund-value {
+    color: var(--text-main);
+    font-weight: 600;
+}
+.refund-confirm-btn {
+    background: var(--primary);
+    color: white;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+.refund-confirm-btn:hover { background: var(--primary-dark); }
+.refund-confirm-btn.done {
+    background: var(--secondary);
+    cursor: default;
+}
+.refund-confirm-btn:disabled { cursor: default; }
+
+/* ── 人工客服消息 ── */
+.agent-message .message-text {
+    border-left: 3px solid var(--secondary);
+    padding-left: 10px;
+}
+.agent-avatar {
+    background: linear-gradient(135deg, #4ECDC4 0%, #3DBDB4 100%) !important;
+}
+.agent-label {
+    font-size: 11px;
+    color: var(--secondary-dark);
+    font-weight: 700;
+    margin-bottom: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
 }
 
 .login-logo-icon {
@@ -1264,4 +1442,39 @@ body {
     margin-top: 20px;
     font-size: 12px;
     color: rgba(255,255,255,0.8);
+}
+
+/* ═══ 星级评价组件 ═══ */
+.rating-widget {
+    display: flex;
+    gap: 6px;
+    margin-top: 10px;
+    padding: 10px 0;
+}
+
+.rating-star {
+    font-size: 28px;
+    color: #D0D0D0;
+    cursor: pointer;
+    transition: color 0.2s ease, transform 0.15s ease;
+    user-select: none;
+    line-height: 1;
+}
+
+.rating-star:hover,
+.rating-star.hover {
+    color: #FFD93D;
+    transform: scale(1.2);
+}
+
+.rating-star.active {
+    color: #FFD93D;
+    text-shadow: 0 0 6px rgba(255,217,61,0.4);
+}
+
+.rating-thankyou {
+    margin-top: 8px;
+    font-size: 13px;
+    color: #5B8FE5;
+    font-weight: 500;
 }

@@ -1,17 +1,48 @@
 import json
 import time
+import os
 from datetime import datetime
 from pathlib import Path
 
 from sqlalchemy import create_engine, Column, Integer, Text, String, Float
 from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy.pool import QueuePool
 
 BASE_DIR = Path(__file__).parent
-DB_PATH = BASE_DIR / "ecommerce.db"
-DB_URL = f"sqlite:///{DB_PATH}"
 
-engine = create_engine(DB_URL, echo=False, connect_args={"check_same_thread": False})
-SessionLocal = sessionmaker(bind=engine)
+# ── 数据库配置：支持 SQLite / MySQL / PostgreSQL ──
+# 开发模式（默认）：SQLite
+# 生产模式：设置环境变量 DATABASE_URL
+#   MySQL:      mysql+pymysql://user:password@host:3306/dbname?charset=utf8mb4
+#   PostgreSQL: postgresql://user:password@host:5432/dbname
+
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
+
+if not DATABASE_URL:
+    DB_PATH = BASE_DIR / "ecommerce.db"
+    DATABASE_URL = f"sqlite:///{DB_PATH}"
+
+IS_SQLITE = DATABASE_URL.startswith("sqlite")
+
+if IS_SQLITE:
+    engine = create_engine(
+        DATABASE_URL,
+        echo=False,
+        connect_args={"check_same_thread": False},
+    )
+else:
+    engine = create_engine(
+        DATABASE_URL,
+        echo=False,
+        poolclass=QueuePool,
+        pool_size=10,
+        max_overflow=20,
+        pool_timeout=30,
+        pool_recycle=3600,
+        pool_pre_ping=True,
+    )
+
+SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 Base = declarative_base()
 
 
@@ -63,6 +94,8 @@ class Product(Base):
     attributes = Column(Text)
     stock = Column(String(50))
     created_at = Column(Integer, nullable=False)
+    updated_at = Column(Integer, nullable=False, default=0)
+    version = Column(Integer, nullable=False, default=1)
 
     def to_text(self):
         parts = [f"商品编号：{self.product_id}"]
@@ -108,6 +141,8 @@ class FAQ(Base):
     question = Column(Text, nullable=False)
     answer = Column(Text, nullable=False)
     created_at = Column(Integer, nullable=False)
+    updated_at = Column(Integer, nullable=False, default=0)
+    version = Column(Integer, nullable=False, default=1)
 
     def to_text(self):
         return f"问：{self.question}\n答：{self.answer}"
@@ -120,6 +155,8 @@ class ShippingPolicy(Base):
     title = Column(String(200), nullable=False)
     content = Column(Text, nullable=False)
     created_at = Column(Integer, nullable=False)
+    updated_at = Column(Integer, nullable=False, default=0)
+    version = Column(Integer, nullable=False, default=1)
 
 
 class SizeChart(Base):
@@ -136,6 +173,8 @@ class SizeChart(Base):
     height_range = Column(String(50))
     weight_range = Column(String(50))
     created_at = Column(Integer, nullable=False)
+    updated_at = Column(Integer, nullable=False, default=0)
+    version = Column(Integer, nullable=False, default=1)
 
     def to_text(self):
         parts = [f"品类：{self.product_type}", f"尺码：{self.size}"]
@@ -255,6 +294,25 @@ class Order(Base):
         return "；".join(parts)
 
 
+class ChatMessage(Base):
+    __tablename__ = "chat_messages"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    ticket_id = Column(String(20), nullable=False, index=True)
+    sender = Column(String(20), nullable=False)  # 'user' or 'agent'
+    message = Column(Text, nullable=False)
+    created_at = Column(Integer, nullable=False)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "ticket_id": self.ticket_id,
+            "sender": self.sender,
+            "message": self.message,
+            "created_at": self.created_at,
+        }
+
+
 class AuditLog(Base):
     __tablename__ = "audit_logs"
 
@@ -277,6 +335,29 @@ class AuditLog(Base):
             "target_id": self.target_id,
             "detail": self.detail,
             "created_at": self.created_at,
+        }
+
+
+class LearnedQA(Base):
+    __tablename__ = "learned_qa"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    question = Column(Text, nullable=False)
+    answer = Column(Text, nullable=False)
+    source = Column(String(20))
+    hit_count = Column(Integer, nullable=False, default=0)
+    created_at = Column(Integer, nullable=False)
+    last_hit_at = Column(Integer)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "question": self.question,
+            "answer": self.answer,
+            "source": self.source,
+            "hit_count": self.hit_count,
+            "created_at": self.created_at,
+            "last_hit_at": self.last_hit_at,
         }
 
 

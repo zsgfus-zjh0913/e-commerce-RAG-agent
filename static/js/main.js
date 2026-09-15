@@ -2,11 +2,6 @@
 const chatMessages = document.getElementById("chat-messages");
 const chatInput = document.getElementById("chat-input");
 const sendBtn = document.getElementById("send-btn");
-const dropzone = document.getElementById("dropzone");
-const fileInput = document.getElementById("file-input");
-const uploadStatus = document.getElementById("upload-status");
-const docList = document.getElementById("doc-list");
-const docCount = document.getElementById("doc-count");
 const statDocs = document.getElementById("stat-docs");
 const statChunks = document.getElementById("stat-chunks");
 const apiKeyInput = document.getElementById("api-key-input");
@@ -23,12 +18,31 @@ const userAvatar = document.getElementById("user-avatar");
 const userName = document.getElementById("user-name");
 const apiKeyToggle = document.getElementById("api-key-toggle");
 const apiKeyDropdown = document.getElementById("api-key-dropdown");
+const imageUploadBtn = document.getElementById("image-upload-btn");
+const imageInput = document.getElementById("image-input");
+const imagePreview = document.getElementById("image-preview");
+const imagePreviewImg = document.getElementById("image-preview-img");
+const imagePreviewName = document.getElementById("image-preview-name");
+const imageRemoveBtn = document.getElementById("image-remove-btn");
 
 // ═══ 全局状态 ═══
 let sessionId = null;
 let conversationId = null;
 let userGender = "male";
 let currentMessages = [];
+let humanMode = false;
+let activeTicketId = null;
+let pollTimer = null;
+let lastMsgId = 0;
+let lastTicketStatus = null;
+let autoResumeAttempted = false;
+let inactivityTimer = null;
+let lastQuestion = "";
+let lastBotMessage = "";
+let ratingShown = false;
+let farewellShown = false;
+let pendingImageFile = null;
+let pendingImageUrl = null;
 
 // ═══ Markdown 渲染 ═══
 if (typeof marked !== "undefined") {
@@ -285,6 +299,9 @@ async function deleteConversation(e, convId) {
 function newConversation() {
     conversationId = null;
     currentMessages = [];
+    ratingShown = false;
+    farewellShown = false;
+    stopInactivityTimer();
     showWelcomeMessage();
     loadHistory();
     chatInput.focus();
@@ -294,10 +311,10 @@ function newConversation() {
 function showWelcomeMessage() {
     chatMessages.innerHTML = `
         <div class="message bot-message">
-            <div class="message-avatar bot-avatar">🐂</div>
+            <div class="message-avatar bot-avatar">🌸</div>
             <div class="message-content">
                 <div class="message-text">
-                    您好，我是客服助手<strong>牛马</strong>。我可以帮您：
+                    您好，我是客服助手<strong>暖小助</strong>。我可以帮您：
                     <br><br>
                     <strong>商品信息</strong> — 查询商品详情、价格、尺码、库存<br>
                     <strong>更换商品</strong> — 换货政策、换码流程<br>
@@ -326,7 +343,7 @@ function addMessage(role, text, sources) {
 
     const avatar = document.createElement("div");
     avatar.className = "message-avatar " + (role === "user" ? "user-avatar-msg" : "bot-avatar");
-    avatar.textContent = role === "user" ? getUserAvatar() : "🐂";
+    avatar.textContent = role === "user" ? getUserAvatar() : "🌸";
 
     const content = document.createElement("div");
     content.className = "message-content";
@@ -336,23 +353,15 @@ function addMessage(role, text, sources) {
     textDiv.innerHTML = renderMarkdown(text);
     content.appendChild(textDiv);
 
-    if (sources && sources.length > 0) {
-        const sourcesDiv = document.createElement("div");
-        sourcesDiv.className = "message-sources";
-        sourcesDiv.style.alignSelf = role === "user" ? "flex-end" : "flex-start";
-        sources.forEach((s) => {
-            const tag = document.createElement("span");
-            tag.className = "source-tag";
-            tag.innerHTML = `📎 ${escapeHtml(s.source)} <span class="source-score">${(s.score * 100).toFixed(0)}%</span>`;
-            sourcesDiv.appendChild(tag);
-        });
-        content.appendChild(sourcesDiv);
-    }
-
     wrapper.appendChild(avatar);
     wrapper.appendChild(content);
     chatMessages.appendChild(wrapper);
     scrollToBottom();
+
+    if (role === "bot") {
+        lastBotMessage = text;
+    }
+
     return { wrapper, content, textDiv };
 }
 
@@ -363,7 +372,7 @@ function addTypingIndicator() {
 
     const avatar = document.createElement("div");
     avatar.className = "message-avatar bot-avatar";
-    avatar.textContent = "🐂";
+    avatar.textContent = "🌸";
 
     const indicator = document.createElement("div");
     indicator.className = "typing-indicator";
@@ -380,13 +389,165 @@ function removeTypingIndicator() {
     if (el) el.remove();
 }
 
+function clearPendingImage() {
+    if (pendingImageUrl) {
+        URL.revokeObjectURL(pendingImageUrl);
+    }
+    pendingImageFile = null;
+    pendingImageUrl = null;
+    imageInput.value = "";
+    imagePreview.style.display = "none";
+    imagePreviewImg.removeAttribute("src");
+    imagePreviewName.textContent = "";
+}
+
+function setPendingImage(file) {
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+        addMessage("bot", "请选择 JPG、PNG、WebP 或 BMP 图片。");
+        return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+        addMessage("bot", "图片不能超过 10MB。");
+        return;
+    }
+
+    clearPendingImage();
+    pendingImageFile = file;
+    pendingImageUrl = URL.createObjectURL(file);
+    imagePreviewImg.src = pendingImageUrl;
+    imagePreviewName.textContent = file.name;
+    imagePreview.style.display = "flex";
+    chatInput.focus();
+}
+
+function addImageMessage(file, text) {
+    const wrapper = document.createElement("div");
+    wrapper.className = "message user-message";
+
+    const avatar = document.createElement("div");
+    avatar.className = "message-avatar user-avatar-msg";
+    avatar.textContent = getUserAvatar();
+
+    const content = document.createElement("div");
+    content.className = "message-content";
+
+    const image = document.createElement("img");
+    image.className = "message-image";
+    image.src = URL.createObjectURL(file);
+    image.alt = "用户上传的商品图片";
+    image.onload = () => {
+        const objectUrl = image.src;
+        setTimeout(() => URL.revokeObjectURL(objectUrl), 60000);
+    };
+    content.appendChild(image);
+
+    if (text) {
+        const textDiv = document.createElement("div");
+        textDiv.className = "message-text";
+        textDiv.innerHTML = renderMarkdown(text);
+        content.appendChild(textDiv);
+    }
+
+    wrapper.appendChild(avatar);
+    wrapper.appendChild(content);
+    chatMessages.appendChild(wrapper);
+    scrollToBottom();
+}
+
+async function sendImageMessage(question) {
+    const file = pendingImageFile;
+    if (!file) return;
+
+    addImageMessage(file, question);
+    clearPendingImage();
+    sendBtn.disabled = true;
+    stopInactivityTimer();
+
+    const formData = new FormData();
+    formData.append("image", file);
+    formData.append("question", question || "");
+    formData.append("session_id", sessionId || "");
+    formData.append("conversation_id", conversationId || "");
+
+    try {
+        const res = await fetch("/api/query/image", {
+            method: "POST",
+            body: formData,
+        });
+        if (res.status === 401) {
+            window.location.href = "/login";
+            return;
+        }
+        if (!res.ok) {
+            let errorText = "图片处理失败，请稍后重试。";
+            try {
+                const errorData = await res.json();
+                errorText = errorData.error || errorText;
+            } catch (err) {
+                // 保留通用错误提示
+            }
+            addMessage("bot", errorText);
+            resetInactivityTimer();
+            return;
+        }
+
+        const contentType = res.headers.get("content-type") || "";
+        if (contentType.includes("text/event-stream")) {
+            await handleSSEResponse(res);
+        } else {
+            const data = await res.json();
+            addMessage("bot", data.error || "图片处理失败，请稍后重试。");
+            resetInactivityTimer();
+        }
+    } catch (err) {
+        addMessage("bot", "图片上传失败，请检查服务器是否正在运行。");
+        resetInactivityTimer();
+    } finally {
+        sendBtn.disabled = false;
+        chatInput.focus();
+    }
+}
+
 async function sendMessage() {
     const question = chatInput.value.trim();
+    if (pendingImageFile) {
+        chatInput.value = "";
+        await sendImageMessage(question);
+        return;
+    }
     if (!question) return;
 
     addMessage("user", question);
     chatInput.value = "";
     sendBtn.disabled = true;
+    lastQuestion = question;
+    ratingShown = false;
+    stopInactivityTimer();
+
+    // 人工客服模式：消息发送给坐席
+    if (humanMode && activeTicketId) {
+        try {
+            const res = await fetch("/api/chat/send", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    ticket_id: activeTicketId,
+                    message: question,
+                }),
+            });
+            if (res.status === 401) { window.location.href = "/login"; return; }
+            const data = await res.json();
+            if (!data.success) {
+                addMessage("bot", "发送失败: " + (data.error || ""));
+            }
+        } catch (err) {
+            addMessage("bot", "网络错误，请检查服务器是否正在运行。");
+        }
+        sendBtn.disabled = false;
+        chatInput.focus();
+        return;
+    }
 
     try {
         const res = await fetch("/api/query", {
@@ -416,11 +577,16 @@ async function sendMessage() {
                 addMessage("bot", "出错了：" + data.error);
             } else {
                 addMessage("bot", data.answer, data.sources);
+                if (isAcknowledgment(lastQuestion)) {
+                    setTimeout(showRatingWidget, 500);
+                }
             }
+            resetInactivityTimer();
         }
     } catch (err) {
         removeTypingIndicator();
         addMessage("bot", "网络错误，请检查服务器是否正在运行。");
+        resetInactivityTimer();
     }
 
     sendBtn.disabled = false;
@@ -432,6 +598,7 @@ async function handleSSEResponse(res) {
     textDiv.className = "message-text stream-cursor";
     let sources = [];
     let fullText = "";
+    let multimodalInfo = null;
 
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
@@ -462,7 +629,21 @@ async function handleSSEResponse(res) {
                         // 工单创建成功，刷新工单列表
                         if (evt.data) {
                             loadTickets();
+                            // 转人工、退款、换货、售后工单均进入人工会话
+                            if (isLiveTicket(evt.data)) {
+                                activeTicketId = evt.data.ticket_id;
+                                lastTicketStatus = evt.data.status;
+                                humanMode = true;
+                                rememberHumanTicket(evt.data.ticket_id);
+                                startAgentPolling();
+                                stopInactivityTimer();
+                            }
                         }
+                    } else if (evt.type === "refund_card") {
+                        renderRefundCard(evt.data.orders);
+                    } else if (evt.type === "multimodal") {
+                        // 图片检索诊断：OCR 文字 / 向量提供者
+                        multimodalInfo = evt.data || {};
                     } else if (evt.type === "sources") {
                         sources = evt.data || [];
                     } else if (evt.type === "delta") {
@@ -473,20 +654,21 @@ async function handleSSEResponse(res) {
                         conversationId = evt.data;
                         loadHistory();
                     } else if (evt.type === "done") {
+                        // 如果有 OCR 识别结果，追加提示
+                        if (multimodalInfo && multimodalInfo.ocr_text) {
+                            const ocr = multimodalInfo.ocr_text.trim();
+                            if (ocr && !fullText.includes(ocr)) {
+                                fullText += `\n\n---\n📷 图片识别文字：${ocr}`;
+                            }
+                        }
                         textDiv.className = "message-text";
                         textDiv.innerHTML = renderMarkdown(fullText);
-                        if (sources.length > 0) {
-                            const sourcesDiv = document.createElement("div");
-                            sourcesDiv.className = "message-sources";
-                            sources.forEach((s) => {
-                                const tag = document.createElement("span");
-                                tag.className = "source-tag";
-                                tag.innerHTML = `📎 ${escapeHtml(s.source)} <span class="source-score">${(s.score * 100).toFixed(0)}%</span>`;
-                                sourcesDiv.appendChild(tag);
-                            });
-                            content.appendChild(sourcesDiv);
-                        }
                         scrollToBottom();
+                        lastBotMessage = fullText;
+                        if (isAcknowledgment(lastQuestion)) {
+                            setTimeout(showRatingWidget, 500);
+                        }
+                        resetInactivityTimer();
                     }
                 } catch (e) {
                     // 忽略解析错误
@@ -506,6 +688,12 @@ function askExample(question) {
     sendMessage();
 }
 
+imageUploadBtn.addEventListener("click", () => imageInput.click());
+imageInput.addEventListener("change", () => {
+    setPendingImage(imageInput.files && imageInput.files[0]);
+});
+imageRemoveBtn.addEventListener("click", clearPendingImage);
+
 chatInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
@@ -515,121 +703,130 @@ chatInput.addEventListener("keydown", (e) => {
 
 sendBtn.addEventListener("click", sendMessage);
 
-// ═══ 文件上传 ═══
-dropzone.addEventListener("click", () => fileInput.click());
+// ═══ 确认词检测与星级评价 ═══
+function isAcknowledgment(text) {
+    const ackPatterns = [
+        "好的", "好嘞", "好滴", "好吧", "好", "行", "可以", "收到",
+        "明白", "了解", "知道了", "懂了", "嗯", "嗯嗯", "嗯好",
+        "ok", "OK", "Ok", "oK", "okay", "fine",
+    ];
+    const trimmed = text.trim().toLowerCase();
+    if (!ackPatterns.some(p => trimmed === p.toLowerCase())) return false;
 
-dropzone.addEventListener("dragover", (e) => {
-    e.preventDefault();
-    dropzone.classList.add("dragover");
-});
-
-dropzone.addEventListener("dragleave", () => {
-    dropzone.classList.remove("dragover");
-});
-
-dropzone.addEventListener("drop", (e) => {
-    e.preventDefault();
-    dropzone.classList.remove("dragover");
-    handleFiles(e.dataTransfer.files);
-});
-
-fileInput.addEventListener("change", (e) => {
-    handleFiles(e.target.files);
-    fileInput.value = "";
-});
-
-const SUPPORTED_EXTS = [".txt", ".md", ".csv", ".json", ".docx", ".pdf", ".xlsx", ".xls", ".pptx", ".html", ".htm"];
-
-async function handleFiles(files) {
-    for (const file of files) {
-        const ext = "." + file.name.split(".").pop().toLowerCase();
-        if (!SUPPORTED_EXTS.includes(ext)) {
-            showUploadStatus(`不支持的文件类型: ${file.name}（${ext}）`, "error");
-            continue;
+    // 如果上一条机器人消息是提问或建议（如"要不要查下库存？"），
+    // 则"好的"是确认动作，不是简单结束语，不触发评价
+    if (lastBotMessage) {
+        const actionPatterns = [
+            "要不要", "是否需要", "需要我", "帮您", "要不要查", "要不要看",
+            "可以帮", "需要帮", "是否帮", "能否帮", "想不想",
+        ];
+        if (actionPatterns.some(p => lastBotMessage.includes(p))) {
+            return false;
         }
-        const formData = new FormData();
-        formData.append("file", file);
-        showUploadStatus(`正在上传 ${file.name}...`, "");
-        try {
-            const res = await fetch("/api/upload", { method: "POST", body: formData });
-            if (res.status === 401) { window.location.href = "/login"; return; }
-            const data = await res.json();
-            if (data.success) {
-                showUploadStatus(data.message, "success");
-                loadDocuments();
-                loadStats();
-            } else {
-                showUploadStatus(data.error || "上传失败", "error");
-            }
-        } catch (err) {
-            showUploadStatus("上传失败: " + err.message, "error");
+        if (/[？?]\s*$/.test(lastBotMessage.trim())) {
+            return false;
         }
     }
+    return true;
 }
 
-function showUploadStatus(msg, type) {
-    uploadStatus.textContent = msg;
-    uploadStatus.className = "upload-status " + type;
-    if (type === "success") {
-        setTimeout(() => {
-            uploadStatus.textContent = "";
-            uploadStatus.className = "upload-status";
-        }, 3000);
-    }
-}
+function showRatingWidget() {
+    if (ratingShown) return;
+    ratingShown = true;
 
-// ═══ 文档列表 ═══
-async function loadDocuments() {
-    try {
-        const res = await fetch("/api/documents");
-        if (res.status === 401) { window.location.href = "/login"; return; }
-        const data = await res.json();
-        renderDocList(data.documents);
-    } catch (err) {
-        console.error("加载文档列表失败:", err);
-    }
-}
+    const wrapper = document.createElement("div");
+    wrapper.className = "message bot-message";
 
-function renderDocList(docs) {
-    docCount.textContent = docs.length;
-    if (docs.length === 0) {
-        docList.innerHTML = '<div class="doc-empty">暂无文档，请上传</div>';
-        return;
-    }
-    docList.innerHTML = "";
-    docs.forEach((doc) => {
-        const item = document.createElement("div");
-        item.className = "doc-item";
-        item.innerHTML = `
-            <span class="doc-icon">${getFileIcon(doc.name)}</span>
-            <div class="doc-info">
-                <div class="doc-name" title="${escapeHtml(doc.name)}">${escapeHtml(doc.name)}</div>
-                <div class="doc-size">${formatSize(doc.size)}</div>
-            </div>
-            <button class="doc-delete" title="删除" onclick="deleteDoc('${escapeHtml(doc.name)}')">✕</button>
-        `;
-        docList.appendChild(item);
+    const avatar = document.createElement("div");
+    avatar.className = "message-avatar bot-avatar";
+    avatar.textContent = "🌸";
+
+    const content = document.createElement("div");
+    content.className = "message-content";
+
+    const textDiv = document.createElement("div");
+    textDiv.className = "message-text";
+    textDiv.innerHTML = "请问您对本次服务还满意吗？可以给暖小助评个分吗？⬇️";
+
+    const ratingDiv = document.createElement("div");
+    ratingDiv.className = "rating-widget";
+    ratingDiv.innerHTML = `
+        <span class="rating-star" data-val="1">★</span>
+        <span class="rating-star" data-val="2">★</span>
+        <span class="rating-star" data-val="3">★</span>
+        <span class="rating-star" data-val="4">★</span>
+        <span class="rating-star" data-val="5">★</span>
+    `;
+
+    ratingDiv.querySelectorAll(".rating-star").forEach(star => {
+        star.addEventListener("mouseenter", () => {
+            const val = parseInt(star.dataset.val);
+            ratingDiv.querySelectorAll(".rating-star").forEach((s, i) => {
+                s.classList.toggle("hover", i < val);
+            });
+        });
+        star.addEventListener("mouseleave", () => {
+            ratingDiv.querySelectorAll(".rating-star").forEach(s => {
+                s.classList.remove("hover");
+            });
+        });
+        star.addEventListener("click", () => {
+            const val = parseInt(star.dataset.val);
+            submitRating(val, ratingDiv);
+        });
     });
+
+    content.appendChild(textDiv);
+    content.appendChild(ratingDiv);
+    wrapper.appendChild(avatar);
+    wrapper.appendChild(content);
+    chatMessages.appendChild(wrapper);
+    scrollToBottom();
 }
 
-async function deleteDoc(filename) {
-    if (!confirm(`确定删除文件 "${filename}" 吗？`)) return;
+async function submitRating(val, container) {
+    container.querySelectorAll(".rating-star").forEach((s, i) => {
+        s.classList.toggle("active", i < val);
+                s.classList.remove("hover");
+    });
+    container.style.pointerEvents = "none";
+    const thankYou = document.createElement("div");
+    thankYou.className = "rating-thankyou";
+    thankYou.textContent = "感谢您的评价！祝您生活愉快~ 🌸";
+    container.appendChild(thankYou);
+    scrollToBottom();
+
     try {
-        const res = await fetch("/api/delete", {
+        await fetch("/api/rating", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ filename: filename }),
+            body: JSON.stringify({
+                rating: val,
+                conversation_id: conversationId || "",
+                question: lastQuestion,
+            }),
         });
-        const data = await res.json();
-        if (data.success) {
-            showUploadStatus(data.message, "success");
-            loadDocuments();
-            loadStats();
-        } else {
-            showUploadStatus(data.error || "删除失败", "error");
-        }
     } catch (err) {
-        showUploadStatus("删除失败: " + err.message, "error");
+        // 评价提交失败静默处理
+    }
+}
+
+// ═══ 2分钟无回复自动提醒 ═══
+function resetInactivityTimer() {
+    farewellShown = false;
+    if (inactivityTimer) clearTimeout(inactivityTimer);
+    inactivityTimer = setTimeout(() => {
+        if (humanMode) return;
+        if (farewellShown) return;
+        farewellShown = true;
+        addMessage("bot", "亲亲，这边看您暂时没有回复，这边先不打扰您了，如果您有后续有任何疑虑欢迎随时咨询~您也可以添加我们的客服微信进一步咨询哦~");
+    }, 120000);
+}
+
+function stopInactivityTimer() {
+    if (inactivityTimer) {
+        clearTimeout(inactivityTimer);
+        inactivityTimer = null;
     }
 }
 
@@ -643,6 +840,92 @@ async function loadStats() {
         statChunks.textContent = data.total_chunks || 0;
     } catch (err) {
         console.error("加载统计失败:", err);
+    }
+}
+
+// ═══ 人工会话恢复 ═══
+function isLiveTicket(ticket) {
+    return ["human_agent", "refund", "exchange", "after_sale"].includes(ticket.ticket_type)
+        && ["pending", "approved"].includes(ticket.status);
+}
+
+const ACTIVE_HUMAN_TICKET_KEY = "activeHumanTicketId";
+
+function rememberHumanTicket(ticketId) {
+    try {
+        sessionStorage.setItem(ACTIVE_HUMAN_TICKET_KEY, ticketId);
+    } catch (err) {
+        // 浏览器禁用 sessionStorage 时仅保留当前页面会话
+    }
+}
+
+function forgetHumanTicket() {
+    try {
+        sessionStorage.removeItem(ACTIVE_HUMAN_TICKET_KEY);
+    } catch (err) {
+        // 忽略存储异常
+    }
+}
+
+function getRememberedHumanTicket() {
+    try {
+        return sessionStorage.getItem(ACTIVE_HUMAN_TICKET_KEY);
+    } catch (err) {
+        return null;
+    }
+}
+
+function stopHumanSessionPolling() {
+    if (pollTimer) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+    }
+}
+
+async function loadHumanHistory(ticketId) {
+    const res = await fetch(`/api/ticket/${ticketId}/history`);
+    if (res.status === 401) {
+        window.location.href = "/login";
+        return null;
+    }
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+
+    chatMessages.innerHTML = "";
+    lastMsgId = 0;
+    (data.messages || []).forEach((message) => {
+        if (message.sender === "user") {
+            addMessage("user", message.message);
+        } else {
+            addAgentMessage(message.message);
+        }
+        if (message.sender === "agent" && message.id > lastMsgId) {
+            lastMsgId = message.id;
+        }
+    });
+    if (!data.messages || data.messages.length === 0) {
+        addMessage("bot", `已进入人工服务会话（${ticketId}）。请描述您的问题，等待坐席接入。`);
+    }
+    return data.ticket;
+}
+
+async function resumeHumanSession(ticket) {
+    if (!ticket || !isLiveTicket(ticket)) return;
+    rememberHumanTicket(ticket.ticket_id);
+    humanMode = true;
+    activeTicketId = ticket.ticket_id;
+    lastTicketStatus = ticket.status;
+    stopHumanSessionPolling();
+    stopInactivityTimer();
+    try {
+        const currentTicket = await loadHumanHistory(ticket.ticket_id);
+        if (currentTicket) {
+            lastTicketStatus = currentTicket.status;
+        }
+        startAgentPolling();
+        loadTickets();
+    } catch (err) {
+        console.error("恢复人工会话失败:", err);
     }
 }
 
@@ -675,9 +958,15 @@ function renderTicketList(tickets) {
         const typeText = {
             refund: "退款",
             human_agent: "转人工",
+            exchange: "换货",
+            after_sale: "售后",
         }[t.ticket_type] || t.ticket_type;
         const item = document.createElement("div");
-        item.className = "ticket-card";
+        item.className = "ticket-card" + (t.ticket_id === activeTicketId ? " active" : "");
+        if (isLiveTicket(t)) {
+            item.classList.add("clickable");
+            item.onclick = () => resumeHumanSession(t);
+        }
         item.innerHTML = `
             <div class="ticket-card-header">
                 <span class="ticket-type-badge ${t.ticket_type}">${typeText}</span>
@@ -688,6 +977,171 @@ function renderTicketList(tickets) {
         `;
         ticketList.appendChild(item);
     });
+
+    const rememberedTicketId = getRememberedHumanTicket();
+    const rememberedTicket = rememberedTicketId
+        ? tickets.find((t) => t.ticket_id === rememberedTicketId && isLiveTicket(t))
+        : null;
+    if (!humanMode && rememberedTicket && !autoResumeAttempted) {
+        autoResumeAttempted = true;
+        resumeHumanSession(rememberedTicket);
+    } else if (rememberedTicketId && !rememberedTicket) {
+        forgetHumanTicket();
+    }
+}
+
+// ═══ 退款卡片 ═══
+function renderRefundCard(orders) {
+    const wrapper = document.createElement("div");
+    wrapper.className = "message bot-message";
+
+    const avatar = document.createElement("div");
+    avatar.className = "message-avatar bot-avatar";
+    avatar.textContent = "🌸";
+
+    const content = document.createElement("div");
+    content.className = "message-content";
+
+    const card = document.createElement("div");
+    card.className = "refund-card";
+
+    const title = document.createElement("div");
+    title.className = "refund-card-title";
+    title.textContent = "退款申请";
+    card.appendChild(title);
+
+    orders.forEach((o) => {
+        if (o.status === "refunded" || o.status === "cancelled") return;
+        const item = document.createElement("div");
+        item.className = "refund-order-item";
+        item.innerHTML = `
+            <div class="refund-order-info">
+                <div class="refund-order-row"><span class="refund-label">订单号</span><span class="refund-value">${escapeHtml(o.order_id)}</span></div>
+                <div class="refund-order-row"><span class="refund-label">商品</span><span class="refund-value">${escapeHtml(o.product_name)}</span></div>
+                <div class="refund-order-row"><span class="refund-label">数量</span><span class="refund-value">${o.quantity}</span></div>
+                <div class="refund-order-row"><span class="refund-label">金额</span><span class="refund-value">${o.amount}元</span></div>
+                <div class="refund-order-row"><span class="refund-label">状态</span><span class="refund-value">${escapeHtml(o.status_text || o.status)}</span></div>
+            </div>
+            <button class="refund-confirm-btn" onclick="confirmRefund('${o.order_id}')">确认退款</button>
+        `;
+        card.appendChild(item);
+    });
+
+    content.appendChild(card);
+    wrapper.appendChild(avatar);
+    wrapper.appendChild(content);
+    chatMessages.appendChild(wrapper);
+    scrollToBottom();
+}
+
+async function confirmRefund(orderId) {
+    const btn = event.target;
+    btn.disabled = true;
+    btn.textContent = "提交中...";
+    try {
+        const res = await fetch("/api/refund/confirm", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ order_id: orderId }),
+        });
+        if (res.status === 401) { window.location.href = "/login"; return; }
+        const data = await res.json();
+        if (data.success) {
+            btn.textContent = "已提交";
+            btn.className = "refund-confirm-btn done";
+            addMessage("bot", `退款申请已提交！工单号：${data.ticket.ticket_id}\n\n人工客服将尽快审核您的退款申请，审核结果会在这里通知您。`);
+            loadTickets();
+            resumeHumanSession(data.ticket);
+        } else {
+            btn.textContent = "确认退款";
+            btn.disabled = false;
+            addMessage("bot", "退款申请失败: " + (data.error || ""));
+        }
+    } catch (err) {
+        btn.textContent = "确认退款";
+        btn.disabled = false;
+        addMessage("bot", "网络错误，请重试。");
+    }
+}
+
+// ═══ 人工客服会话 ═══
+function addAgentMessage(text) {
+    const wrapper = document.createElement("div");
+    wrapper.className = "message bot-message agent-message";
+
+    const avatar = document.createElement("div");
+    avatar.className = "message-avatar agent-avatar";
+    avatar.textContent = "🧑‍💼";
+
+    const content = document.createElement("div");
+    content.className = "message-content";
+
+    const label = document.createElement("div");
+    label.className = "agent-label";
+    label.textContent = "人工客服";
+    content.appendChild(label);
+
+    const textDiv = document.createElement("div");
+    textDiv.className = "message-text";
+    textDiv.innerHTML = renderMarkdown(text);
+    content.appendChild(textDiv);
+
+    wrapper.appendChild(avatar);
+    wrapper.appendChild(content);
+    chatMessages.appendChild(wrapper);
+    scrollToBottom();
+}
+
+function startAgentPolling() {
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = setInterval(pollTicketUpdates, 3000);
+}
+
+function stopAgentPolling() {
+    if (pollTimer) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+    }
+}
+
+async function pollTicketUpdates() {
+    if (!activeTicketId) return;
+    try {
+        const res = await fetch(`/api/ticket/${activeTicketId}/updates?after_id=${lastMsgId}`);
+        if (res.status === 401) { window.location.href = "/login"; return; }
+        const data = await res.json();
+        if (data.error) return;
+
+        const ticket = data.ticket;
+
+        // 检测状态变化
+        if (lastTicketStatus !== ticket.status) {
+            if (ticket.status === "resolved" || ticket.status === "rejected") {
+                if (!data.messages || data.messages.length === 0) {
+                    addAgentMessage(ticket.agent_reply || "本次人工服务已结束。");
+                }
+                humanMode = false;
+                activeTicketId = null;
+                forgetHumanTicket();
+                stopAgentPolling();
+                loadTickets();
+                resetInactivityTimer();
+            } else if (ticket.status === "approved") {
+                loadTickets();
+            }
+            lastTicketStatus = ticket.status;
+        }
+
+        // 显示坐席消息
+        if (data.messages && data.messages.length > 0) {
+            data.messages.forEach((m) => {
+                addAgentMessage(m.message);
+                if (m.id > lastMsgId) lastMsgId = m.id;
+            });
+        }
+    } catch (err) {
+        // 网络错误静默处理，下次重试
+    }
 }
 
 // ═══ 初始化 ═══
@@ -697,7 +1151,6 @@ function renderTicketList(tickets) {
     await loadSettings();
     await loadHistory();
     await loadTickets();
-    await loadDocuments();
     await loadStats();
     chatInput.focus();
 })();

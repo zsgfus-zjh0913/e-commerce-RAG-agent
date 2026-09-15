@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>牛马客服 · 电商智能客服</title>
-    <link rel="stylesheet" href="/static/css/style.css">
+    <title>暖小助客服 · 电商智能客服</title>
+    <link rel="stylesheet" href="/static/css/style.css?v=20260914b">
 </head>
 <body>
 <div id="app">
@@ -51,33 +51,6 @@
             </div>
         </div>
 
-        <!-- 上传区域 -->
-        <div class="sidebar-section upload-section">
-            <h3 class="section-title">上传文档</h3>
-            <div id="dropzone" class="dropzone">
-                <div class="dropzone-content">
-                    <span class="upload-icon">&#128206;</span>
-                    <p>拖拽文件到此处</p>
-                    <p class="dropzone-hint">或点击选择文件</p>
-                    <p class="dropzone-formats">支持 .txt .md .csv .json .docx .pdf .xlsx .pptx</p>
-                </div>
-                <input type="file" id="file-input" multiple
-                       accept=".txt,.md,.csv,.json,.docx,.pdf,.xlsx,.xls,.pptx,.html,.htm" hidden>
-            </div>
-            <div id="upload-status" class="upload-status"></div>
-        </div>
-
-        <!-- 文档列表 -->
-        <div class="sidebar-section doc-section">
-            <div class="section-header">
-                <h3 class="section-title">知识库文档</h3>
-                <span id="doc-count" class="doc-count">0</span>
-            </div>
-            <div id="doc-list" class="doc-list">
-                <div class="doc-empty">暂无文档</div>
-            </div>
-        </div>
-
         <!-- 底部 -->
         <div class="sidebar-footer">
             <div id="stats" class="stats">
@@ -93,7 +66,7 @@
         <header class="chat-header">
             <button id="sidebar-expand" class="sidebar-expand-btn" aria-label="展开侧边栏" title="展开侧边栏">≪≪≪</button>
             <div class="chat-header-text">
-                <h1>牛马客服</h1>
+                <h1>暖小助客服</h1>
                 <p class="chat-subtitle">商品咨询 · 退换货处理 · 售后服务</p>
             </div>
             <div class="chat-header-right">
@@ -126,10 +99,10 @@
 
         <div id="chat-messages" class="chat-messages">
             <div class="message bot-message">
-                <div class="message-avatar bot-avatar">🐂</div>
+                <div class="message-avatar bot-avatar">🌸</div>
                 <div class="message-content">
                     <div class="message-text">
-                        您好，我是客服助手<strong>牛马</strong>。我可以帮您：
+                        您好，我是客服助手<strong>暖小助</strong>。我可以帮您：
                         <br><br>
                         <strong>商品信息</strong> — 查询商品详情、价格、尺码、库存<br>
                         <strong>更换商品</strong> — 换货政策、换码流程<br>
@@ -151,9 +124,22 @@
         </div>
 
         <div class="chat-input-area">
+            <div id="image-preview" class="image-preview" style="display:none">
+                <img id="image-preview-img" alt="商品图片预览">
+                <span id="image-preview-name"></span>
+                <button id="image-remove-btn" type="button" title="移除图片">×</button>
+            </div>
             <div class="chat-input-wrapper">
+                <button id="image-upload-btn" class="image-upload-btn" type="button" title="上传商品图片">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="3" y="3" width="18" height="18" rx="2"></rect>
+                        <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                        <path d="M21 15l-5-5L5 21"></path>
+                    </svg>
+                </button>
+                <input id="image-input" type="file" accept=".jpg,.jpeg,.png,.webp,.bmp,image/*" hidden>
                 <input type="text" id="chat-input" class="chat-input"
-                       placeholder="输入您的问题..." autocomplete="off">
+                       placeholder="输入问题，或上传商品图片..." autocomplete="off">
                 <button id="send-btn" class="send-btn" onclick="sendMessage()">
                     <span>发送</span>
                     <span class="send-icon">
@@ -170,6 +156,6 @@
 
 <script src="https://cdn.jsdelivr.net/npm/marked@12.0.0/marked.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.9/dist/purify.min.js"></script>
-<script src="/static/js/main.js"></script>
+<script src="/static/js/main.js?v=20260914c"></script>
 </body>
 </html>

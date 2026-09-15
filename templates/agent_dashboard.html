@@ -100,6 +100,8 @@
         }
         .type-badge.refund { background: rgba(15,52,96,0.1); color: #0f3460; }
         .type-badge.human_agent { background: rgba(78,205,196,0.12); color: #3dbdb4; }
+        .type-badge.exchange { background: rgba(214,158,46,0.14); color: #9c6b00; }
+        .type-badge.after_sale { background: rgba(128,90,213,0.12); color: #6b46c1; }
         .action-btns { display: flex; gap: 6px; }
         .action-btn {
             padding: 5px 12px; border: none; border-radius: 6px;
@@ -154,6 +156,83 @@
         .log-level.WARN { background: #fef3cd; color: #856404; }
         .log-level.ERROR { background: #f8d7da; color: #721c24; }
         .log-level.AUDIT { background: #d1ecf1; color: #0c5460; }
+        /* 会话管理 */
+        .session-list { margin-bottom: 16px; }
+        .session-card {
+            background: white; border-radius: 12px; padding: 16px;
+            margin-bottom: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+            display: flex; align-items: center; justify-content: space-between;
+        }
+        .session-card.active { border-left: 4px solid #38a169; }
+        .session-card.pending { border-left: 4px solid #d69e2e; }
+        .session-info { flex: 1; }
+        .session-info .session-user { font-weight: 700; font-size: 14px; }
+        .session-info .session-meta { font-size: 12px; color: #718096; margin-top: 4px; }
+        .session-actions { display: flex; gap: 8px; }
+        .btn-accept {
+            background: #d4edda; color: #155724; border: none;
+            padding: 6px 14px; border-radius: 6px; font-size: 13px;
+            font-weight: 600; cursor: pointer; transition: all 0.3s;
+        }
+        .btn-accept:hover { background: #38a169; color: white; }
+        .btn-end {
+            background: #f8d7da; color: #721c24; border: none;
+            padding: 6px 14px; border-radius: 6px; font-size: 13px;
+            font-weight: 600; cursor: pointer; transition: all 0.3s;
+        }
+        .btn-end:hover { background: #e53e3e; color: white; }
+        .btn-end:disabled { opacity: 0.45; cursor: not-allowed; }
+        .chat-panel {
+            background: white; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+            overflow: hidden; display: flex; flex-direction: column; height: 500px;
+        }
+        .chat-panel-header {
+            background: #f7fafc; padding: 12px 16px; border-bottom: 1px solid #e2e8f0;
+            font-weight: 700; font-size: 14px; display: flex; justify-content: space-between; align-items: center;
+        }
+        .chat-session-bar {
+            display: flex; align-items: center; justify-content: space-between; gap: 12px;
+            padding: 8px 16px; background: #fff; border-bottom: 1px solid #e2e8f0;
+            font-size: 12px; color: #718096;
+        }
+        .session-action-btns { display: flex; gap: 6px; }
+        .session-action-btn {
+            border: none; border-radius: 6px; padding: 6px 12px;
+            font-size: 12px; font-weight: 600; cursor: pointer;
+        }
+        .session-action-btn.approve { background: #d4edda; color: #155724; }
+        .session-action-btn.reject { background: #f8d7da; color: #721c24; }
+        .session-action-btn.resolve { background: #d1ecf1; color: #0c5460; }
+        .session-action-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+        .chat-messages-area {
+            flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 8px;
+        }
+        .chat-bubble {
+            max-width: 70%; padding: 10px 14px; border-radius: 12px; font-size: 14px;
+            word-break: break-word; line-height: 1.5;
+        }
+        .chat-bubble.user {
+            background: #e2e8f0; color: #1a1a2e; align-self: flex-start;
+        }
+        .chat-bubble.agent {
+            background: #0f3460; color: white; align-self: flex-end;
+        }
+        .chat-input-area {
+            padding: 12px 16px; border-top: 1px solid #e2e8f0; display: flex; gap: 8px;
+        }
+        .chat-input-field {
+            flex: 1; padding: 10px 14px; border: 1px solid #e2e8f0;
+            border-radius: 8px; font-size: 14px; outline: none;
+        }
+        .chat-input-field:focus { border-color: #0f3460; }
+        .chat-send-btn {
+            padding: 10px 20px; background: #0f3460; color: white;
+            border: none; border-radius: 8px; font-size: 14px;
+            font-weight: 600; cursor: pointer; transition: all 0.3s;
+        }
+        .chat-send-btn:hover { background: #1a1a2e; }
+        .chat-send-btn:disabled { background: #a0aec0; cursor: not-allowed; }
+        .chat-empty { text-align: center; padding: 40px; color: #a0aec0; font-size: 14px; }
         @media (max-width: 768px) {
             .stats-grid { grid-template-columns: repeat(2, 1fr); }
             .ticket-table, .order-table { font-size: 12px; }
@@ -176,9 +255,11 @@
     <div class="tabs">
         <button class="tab active" onclick="switchTab('dashboard')">仪表盘</button>
         <button class="tab" onclick="switchTab('tickets')">待处理工单<span class="tab-count pending" id="pending-count">0</span></button>
+        <button class="tab" onclick="switchTab('sessions')">人工会话<span class="tab-count pending" id="session-count">0</span></button>
         <button class="tab" onclick="switchTab('orders')">订单管理</button>
         <button class="tab" onclick="switchTab('audit')">审计日志</button>
         <button class="tab" onclick="switchTab('logs')">系统日志</button>
+        <button class="tab" onclick="switchTab('learnedqa')">已学问答</button>
     </div>
 
     <div class="content">
@@ -212,7 +293,7 @@
                 <table class="ticket-table" id="pending-table">
                     <thead>
                         <tr>
-                            <th>工单号</th><th>类型</th><th>用户</th><th>内容</th>
+                            <th>工单号</th><th>类型</th><th>用户</th><th>订单号</th><th>内容</th>
                             <th>时间</th><th>操作</th>
                         </tr>
                     </thead>
@@ -233,12 +314,45 @@
             <table class="ticket-table">
                 <thead>
                     <tr>
-                        <th>工单号</th><th>类型</th><th>用户</th><th>内容</th>
+                        <th>工单号</th><th>类型</th><th>用户</th><th>订单号</th><th>内容</th>
                         <th>状态</th><th>处理人</th><th>回复</th><th>时间</th>
                     </tr>
                 </thead>
                 <tbody id="all-tickets-tbody"></tbody>
             </table>
+        </div>
+
+        <!-- 人工会话 -->
+        <div class="tab-panel" id="panel-sessions">
+            <div class="section">
+                <div class="section-title">活跃会话</div>
+                <div id="session-list" class="session-list">
+                    <div class="chat-empty">暂无活跃会话</div>
+                </div>
+            </div>
+            <div id="chat-container" style="display:none">
+                <div class="section-title">聊天窗口</div>
+                <div class="chat-panel">
+                    <div class="chat-panel-header">
+                        <span id="chat-user-name">用户</span>
+                        <button class="btn-end" onclick="endSession()">结束会话</button>
+                    </div>
+                    <div class="chat-session-bar">
+                        <span id="chat-session-meta"></span>
+                        <div class="session-action-btns" id="session-action-btns">
+                            <button class="session-action-btn approve" onclick="processSession('approve')">同意申请</button>
+                            <button class="session-action-btn reject" onclick="processSession('reject')">驳回申请</button>
+                            <button class="session-action-btn resolve" onclick="processSession('resolve')">标记完成</button>
+                        </div>
+                    </div>
+                    <div class="chat-messages-area" id="chat-messages-area"></div>
+                    <div class="chat-input-area">
+                        <input type="text" class="chat-input-field" id="agent-chat-input"
+                               placeholder="输入消息..." onkeydown="if(event.key==='Enter')sendAgentMessage()">
+                        <button class="chat-send-btn" onclick="sendAgentMessage()">发送</button>
+                    </div>
+                </div>
+            </div>
         </div>
 
         <!-- 订单管理 -->
@@ -282,15 +396,48 @@
                 <tbody id="logs-tbody"></tbody>
             </table>
         </div>
+
+        <!-- 已学问答 -->
+        <div class="tab-panel" id="panel-learnedqa">
+            <div class="section">
+                <div class="section-title">自学习问答缓存（命中后直接复用答案）</div>
+                <table class="log-table">
+                    <thead>
+                        <tr>
+                            <th>ID</th><th>问题</th><th>答案</th><th>来源</th>
+                            <th>命中次数</th><th>最近命中</th><th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="learnedqa-tbody"></tbody>
+                </table>
+            </div>
+        </div>
     </div>
 
     <script>
         let currentFilter = "";
+        let activeSessionId = null;
+        let activeSessionTicket = null;
+        let agentLastMsgId = 0;
+        let agentPollTimer = null;
+        let sessionPollTimer = null;
+        let agentUsername = "";
+        let canReplyToSession = false;
 
         function fmtTime(ts) {
             if (!ts) return "-";
             const d = new Date(ts * 1000);
             return d.toLocaleString("zh-CN");
+        }
+
+        function esc(s) {
+            if (!s) return "";
+            return String(s)
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#39;");
         }
 
         function switchTab(name) {
@@ -300,9 +447,12 @@
             document.getElementById("panel-" + name).classList.add("active");
 
             if (name === "tickets") loadAllTickets();
+            if (name === "sessions") { loadSessions(); startSessionPolling(); }
             if (name === "orders") loadOrders();
             if (name === "audit") loadAuditLogs();
             if (name === "logs") loadSystemLogs();
+            if (name === "learnedqa") loadLearnedQA();
+            if (name !== "sessions") stopSessionPolling();
         }
 
         async function loadDashboard() {
@@ -319,17 +469,23 @@
 
                 const tbody = document.getElementById("pending-tbody");
                 if (data.pending_tickets.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="6" class="empty-state">暂无待处理工单</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="7" class="empty-state">暂无待处理工单</td></tr>';
                     return;
                 }
                 tbody.innerHTML = "";
                 data.pending_tickets.forEach(t => {
                     const tr = document.createElement("tr");
-                    const typeText = t.ticket_type === "refund" ? "退款" : "转人工";
+                    const typeText = {
+                        refund: "退款",
+                        human_agent: "转人工",
+                        exchange: "换货",
+                        after_sale: "售后",
+                    }[t.ticket_type] || t.ticket_type;
                     tr.innerHTML = `
                         <td style="font-family:monospace;font-size:12px">${t.ticket_id}</td>
                         <td><span class="type-badge ${t.ticket_type}">${typeText}</span></td>
                         <td>${t.username}</td>
+                        <td style="font-family:monospace;font-size:12px">${t.order_id || '-'}</td>
                         <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${t.subject}">${t.subject}</td>
                         <td style="font-size:12px">${fmtTime(t.created_at)}</td>
                         <td>
@@ -356,17 +512,23 @@
                 const data = await res.json();
                 const tbody = document.getElementById("all-tickets-tbody");
                 if (data.tickets.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="8" class="empty-state">暂无工单</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="9" class="empty-state">暂无工单</td></tr>';
                     return;
                 }
                 tbody.innerHTML = "";
                 data.tickets.forEach(t => {
-                    const typeText = t.ticket_type === "refund" ? "退款" : "转人工";
+                    const typeText = {
+                        refund: "退款",
+                        human_agent: "转人工",
+                        exchange: "换货",
+                        after_sale: "售后",
+                    }[t.ticket_type] || t.ticket_type;
                     const tr = document.createElement("tr");
                     tr.innerHTML = `
                         <td style="font-family:monospace;font-size:12px">${t.ticket_id}</td>
                         <td><span class="type-badge ${t.ticket_type}">${typeText}</span></td>
                         <td>${t.username}</td>
+                        <td style="font-family:monospace;font-size:12px">${t.order_id || '-'}</td>
                         <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${t.subject}">${t.subject}</td>
                         <td><span class="status-badge ${t.status}">${t.status}</span></td>
                         <td>${t.handled_by || "-"}</td>
@@ -527,11 +689,321 @@
             }
         }
 
+        async function loadLearnedQA() {
+            try {
+                const res = await fetch("/api/agent/learned-qa");
+                if (res.status === 401) { window.location.href = "/agent/login"; return; }
+                const data = await res.json();
+                const tbody = document.getElementById("learnedqa-tbody");
+                if (!data.items || data.items.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="7" class="empty-state">暂无已学问答</td></tr>';
+                    return;
+                }
+                tbody.innerHTML = "";
+                data.items.forEach(qa => {
+                    const tr = document.createElement("tr");
+                    tr.innerHTML = `
+                        <td style="font-size:12px">${qa.id}</td>
+                        <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(qa.question)}">${esc(qa.question)}</td>
+                        <td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(qa.answer)}">${esc(qa.answer)}</td>
+                        <td><span class="type-badge">${esc(qa.source || "-")}</span></td>
+                        <td style="font-size:12px">${qa.hit_count}</td>
+                        <td style="font-size:12px">${fmtTime(qa.last_hit_at)}</td>
+                        <td><button class="action-btn reject" onclick="deleteLearnedQA(${qa.id})">删除</button></td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+            } catch (err) {
+                console.error("加载已学问答失败:", err);
+            }
+        }
+
+        async function deleteLearnedQA(id) {
+            if (!confirm("确定删除这条已学问答缓存吗？")) return;
+            try {
+                const res = await fetch(`/api/agent/learned-qa/${id}`, { method: "DELETE" });
+                if (res.status === 401) { window.location.href = "/agent/login"; return; }
+                const data = await res.json();
+                if (data.success) {
+                    loadLearnedQA();
+                } else {
+                    alert("删除失败: " + (data.error || ""));
+                }
+            } catch (err) {
+                alert("网络错误: " + err.message);
+            }
+        }
+
+        // ── 会话管理 ──
+        async function loadSessions() {
+            try {
+                const res = await fetch("/api/agent/sessions");
+                if (res.status === 401) { window.location.href = "/agent/login"; return; }
+                const data = await res.json();
+                const list = document.getElementById("session-list");
+                document.getElementById("session-count").textContent = data.sessions.length;
+
+                if (data.sessions.length === 0) {
+                    list.innerHTML = '<div class="chat-empty">暂无活跃会话</div>';
+                    return;
+                }
+                list.innerHTML = "";
+                data.sessions.forEach(s => {
+                    const card = document.createElement("div");
+                    card.className = "session-card " + s.status;
+                    const statusText = s.status === "pending"
+                        ? "待接入"
+                        : (s.is_mine ? "我处理的" : `由 ${s.handled_by || "其他坐席"} 处理`);
+                    const lastMessage = s.last_message
+                        ? `<div class="session-meta">最近消息：${esc(s.last_message).slice(0, 80)}</div>`
+                        : "";
+                    card.innerHTML = `
+                        <div class="session-info">
+                            <div class="session-user">${s.username}</div>
+                            <div class="session-meta">${s.type_label} | ${s.ticket_id} | ${statusText}${s.order_id ? " | 订单 " + s.order_id : ""}</div>
+                            <div class="session-meta" title="${esc(s.subject)}">主题：${esc(s.subject)}</div>
+                            ${lastMessage}
+                        </div>
+                        <div class="session-actions"></div>
+                    `;
+                    const actions = card.querySelector(".session-actions");
+                    const button = document.createElement("button");
+                    if (s.status === "pending") {
+                        button.className = "btn-accept";
+                        button.textContent = "接入";
+                        button.onclick = () => acceptSession(s.ticket_id);
+                    } else {
+                        button.className = "action-btn resolve";
+                        button.textContent = s.is_mine ? "继续处理" : "查看";
+                        button.onclick = () => openChat(s);
+                    }
+                    actions.appendChild(button);
+                    list.appendChild(card);
+                });
+            } catch (err) {
+                console.error("加载会话失败:", err);
+            }
+        }
+
+        function startSessionPolling() {
+            if (sessionPollTimer) clearInterval(sessionPollTimer);
+            sessionPollTimer = setInterval(loadSessions, 5000);
+        }
+
+        function stopSessionPolling() {
+            if (sessionPollTimer) { clearInterval(sessionPollTimer); sessionPollTimer = null; }
+        }
+
+        async function acceptSession(ticketId) {
+            try {
+                const res = await fetch(`/api/agent/ticket/${ticketId}/accept`, { method: "POST" });
+                const data = await res.json();
+                if (data.success) {
+                    openChat(data.ticket);
+                    loadSessions();
+                    loadDashboard();
+                } else {
+                    alert("接入失败: " + (data.error || ""));
+                }
+            } catch (err) {
+                alert("网络错误: " + err.message);
+            }
+        }
+
+        async function openChat(ticket) {
+            if (!ticket || !ticket.ticket_id) return;
+            activeSessionId = ticket.ticket_id;
+            activeSessionTicket = ticket;
+            agentLastMsgId = 0;
+            canReplyToSession = ticket.status === "approved"
+                && (!ticket.handled_by || ticket.handled_by === agentUsername);
+            document.getElementById("chat-container").style.display = "block";
+            document.getElementById("chat-user-name").textContent = "与 " + ticket.username + " 的对话";
+            renderSessionTools(ticket);
+            await loadAgentChatHistory();
+            document.getElementById("agent-chat-input").focus();
+            if (agentPollTimer) clearInterval(agentPollTimer);
+            agentPollTimer = setInterval(pollUserMessages, 2000);
+        }
+
+        function appendChatBubble(sender, message) {
+            const area = document.getElementById("chat-messages-area");
+            const bubble = document.createElement("div");
+            bubble.className = "chat-bubble " + (sender === "agent" ? "agent" : "user");
+            bubble.textContent = message;
+            area.appendChild(bubble);
+            area.scrollTop = area.scrollHeight;
+        }
+
+        function renderSessionTools(ticket) {
+            const meta = document.getElementById("chat-session-meta");
+            const actions = document.getElementById("session-action-btns");
+            const typeText = {
+                refund: "退款",
+                human_agent: "转人工",
+                exchange: "换货",
+                after_sale: "售后",
+            }[ticket.ticket_type] || ticket.ticket_type;
+            const handler = ticket.handled_by ? `处理坐席：${ticket.handled_by}` : "尚未接入";
+            meta.textContent = `${typeText} | ${ticket.ticket_id} | ${handler}${ticket.order_id ? " | 订单 " + ticket.order_id : ""}`;
+
+            const approveBtn = actions.querySelector(".approve");
+            const rejectBtn = actions.querySelector(".reject");
+            const resolveBtn = actions.querySelector(".resolve");
+            const canHandleRequest = canReplyToSession
+                && ["refund", "exchange", "after_sale"].includes(ticket.ticket_type);
+            approveBtn.style.display = canHandleRequest ? "" : "none";
+            rejectBtn.style.display = canHandleRequest ? "" : "none";
+            resolveBtn.style.display = canReplyToSession ? "" : "none";
+            approveBtn.textContent = ticket.ticket_type === "refund" ? "同意退款" : "同意申请";
+            rejectBtn.textContent = ticket.ticket_type === "refund" ? "驳回退款" : "驳回申请";
+            const endBtn = document.querySelector(".btn-end");
+            endBtn.disabled = !canReplyToSession;
+            endBtn.title = canReplyToSession ? "" : "该会话由其他坐席处理";
+            document.getElementById("agent-chat-input").disabled = !canReplyToSession;
+            document.querySelector(".chat-send-btn").disabled = !canReplyToSession;
+            document.getElementById("agent-chat-input").placeholder = canReplyToSession
+                ? "输入消息..."
+                : "该会话由其他坐席处理，仅可查看";
+        }
+
+        async function loadAgentChatHistory() {
+            if (!activeSessionId) return;
+            try {
+                const res = await fetch(`/api/agent/chat/history/${activeSessionId}`);
+                if (res.status === 401) { window.location.href = "/agent/login"; return; }
+                const data = await res.json();
+                if (!data.ticket) return;
+                activeSessionTicket = data.ticket;
+                canReplyToSession = data.ticket.status === "approved"
+                    && (!data.ticket.handled_by || data.ticket.handled_by === agentUsername);
+                renderSessionTools(data.ticket);
+                const area = document.getElementById("chat-messages-area");
+                area.innerHTML = "";
+                agentLastMsgId = 0;
+                (data.messages || []).forEach(m => {
+                    appendChatBubble(m.sender, m.message);
+                    if (m.sender === "user" && m.id > agentLastMsgId) {
+                        agentLastMsgId = m.id;
+                    }
+                });
+            } catch (err) {
+                console.error("加载会话记录失败:", err);
+            }
+        }
+
+        async function sendAgentMessage() {
+            const input = document.getElementById("agent-chat-input");
+            const msg = input.value.trim();
+            if (!msg || !activeSessionId || !canReplyToSession) return;
+            input.value = "";
+
+            appendChatBubble("agent", msg);
+
+            try {
+                const res = await fetch("/api/agent/chat/send", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ ticket_id: activeSessionId, message: msg }),
+                });
+                const data = await res.json();
+                if (!data.success) {
+                    alert("发送失败: " + (data.error || ""));
+                }
+            } catch (err) {
+                alert("网络错误: " + err.message);
+            }
+        }
+
+        async function pollUserMessages() {
+            if (!activeSessionId) return;
+            try {
+                const res = await fetch(`/api/agent/chat/messages/${activeSessionId}?after_id=${agentLastMsgId}`);
+                if (res.status === 401) { window.location.href = "/agent/login"; return; }
+                const data = await res.json();
+                if (data.ticket) {
+                    activeSessionTicket = data.ticket;
+                }
+                if (data.messages && data.messages.length > 0) {
+                    data.messages.forEach(m => {
+                        appendChatBubble("user", m.message);
+                        if (m.id > agentLastMsgId) agentLastMsgId = m.id;
+                    });
+                }
+            } catch (err) {
+                // 静默处理
+            }
+        }
+
+        async function processSession(action) {
+            if (!activeSessionId || !canReplyToSession) return;
+
+            let reply = "";
+            if (action === "reject") {
+                reply = prompt("请输入驳回原因：", "") || "";
+                if (!reply.trim()) return;
+            }
+            const actionText = {
+                approve: "同意该申请",
+                reject: "驳回该申请",
+                resolve: "将本次会话标记为完成",
+            }[action];
+            if (!confirm(`确定要${actionText}吗？`)) return;
+
+            try {
+                const res = await fetch(`/api/agent/ticket/${activeSessionId}/process`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ action, reply }),
+                });
+                const data = await res.json();
+                if (!data.success) {
+                    alert("处理失败: " + (data.error || ""));
+                    return;
+                }
+                if (data.ticket.status === "resolved" || data.ticket.status === "rejected") {
+                    if (agentPollTimer) { clearInterval(agentPollTimer); agentPollTimer = null; }
+                    activeSessionId = null;
+                    activeSessionTicket = null;
+                    document.getElementById("chat-container").style.display = "none";
+                } else {
+                    await loadAgentChatHistory();
+                }
+                loadSessions();
+                loadDashboard();
+            } catch (err) {
+                alert("网络错误: " + err.message);
+            }
+        }
+
+        async function endSession() {
+            if (!activeSessionId || !canReplyToSession) return;
+            if (!confirm("确定要结束当前会话吗？")) return;
+            try {
+                const res = await fetch(`/api/agent/ticket/${activeSessionId}/end`, { method: "POST" });
+                const data = await res.json();
+                if (data.success) {
+                    if (agentPollTimer) { clearInterval(agentPollTimer); agentPollTimer = null; }
+                    activeSessionId = null;
+                    activeSessionTicket = null;
+                    canReplyToSession = false;
+                    document.getElementById("chat-container").style.display = "none";
+                    loadSessions();
+                    loadDashboard();
+                } else {
+                    alert("结束失败: " + (data.error || ""));
+                }
+            } catch (err) {
+                alert("网络错误: " + err.message);
+            }
+        }
+
         async function loadAgentInfo() {
             try {
                 const res = await fetch("/api/agent/me");
                 if (res.status === 401) { window.location.href = "/agent/login"; return; }
                 const data = await res.json();
+                agentUsername = data.username;
                 document.getElementById("agent-name").textContent = data.name;
                 document.getElementById("agent-badge").textContent = data.name;
             } catch (err) {
