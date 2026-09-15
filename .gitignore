@@ -17,3 +17,7 @@ ssl/
 logs/
 db_data/
 redis_data/
+node_modules/
+bat_test.log
+bat_test_err.log
+*.log
