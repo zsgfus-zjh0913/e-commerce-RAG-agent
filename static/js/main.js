@@ -701,6 +701,12 @@ chatInput.addEventListener("keydown", (e) => {
     }
 });
 
+// 输入框自动增高
+chatInput.addEventListener("input", () => {
+    chatInput.style.height = "auto";
+    chatInput.style.height = Math.min(chatInput.scrollHeight, 100) + "px";
+});
+
 sendBtn.addEventListener("click", sendMessage);
 
 // ═══ 确认词检测与星级评价 ═══
