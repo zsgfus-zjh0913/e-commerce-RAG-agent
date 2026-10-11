@@ -1,10 +1,10 @@
 import re
 import html
-import time
 from functools import wraps
-from collections import defaultdict
 
 from flask import request, jsonify, g
+
+import redis_manager
 
 
 SECURITY_HEADERS = {
@@ -75,31 +75,20 @@ class RateLimiter:
         self.max_requests = max_requests
         self.window = window_seconds
         self.auth_max = auth_max
-        self._requests = defaultdict(list)
-        self._auth_attempts = defaultdict(list)
 
     def check(self, key=None, is_auth=False):
         ip = request.remote_addr or "unknown"
         check_key = key or ip
-        now = time.time()
         limit = self.auth_max if is_auth else self.max_requests
-
-        store = self._auth_attempts if is_auth else self._requests
-        store[check_key] = [t for t in store[check_key] if now - t < self.window]
-
-        if len(store[check_key]) >= limit:
-            return False
-
-        store[check_key].append(now)
-        return True
+        allowed, _, _ = redis_manager.check_rate_limit(
+            check_key, limit, self.window
+        )
+        return allowed
 
     def reset(self, key=None):
         ip = request.remote_addr or "unknown"
         check_key = key or ip
-        if check_key in self._requests:
-            del self._requests[check_key]
-        if check_key in self._auth_attempts:
-            del self._auth_attempts[check_key]
+        redis_manager.reset_rate_limit(check_key)
 
 
 rate_limiter = RateLimiter()
@@ -111,18 +100,19 @@ def rate_limit(max_requests=None, window=60, is_auth=False):
         def decorated(*args, **kwargs):
             ip = request.remote_addr or "unknown"
             limit = max_requests or (10 if is_auth else 60)
-
-            now = time.time()
             key = f"{ip}:{f.__name__}"
-            store = rate_limiter._auth_attempts if is_auth else rate_limiter._requests
-            store[key] = [t for t in store[key] if now - t < window]
-
-            if len(store[key]) >= limit:
-                return jsonify({
+            allowed, retry_after, _ = redis_manager.check_rate_limit(
+                f"{'auth' if is_auth else 'api'}:{key}",
+                limit,
+                window,
+            )
+            if not allowed:
+                response = jsonify({
                     "error": "请求过于频繁，请稍后再试"
-                }), 429
-
-            store[key].append(now)
+                })
+                response.status_code = 429
+                response.headers["Retry-After"] = str(retry_after)
+                return response
             return f(*args, **kwargs)
         return decorated
     return decorator

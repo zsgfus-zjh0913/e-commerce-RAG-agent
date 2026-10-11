@@ -11,16 +11,54 @@ services:
       - ./index:/app/index
       - ./logs:/app/logs
     environment:
-      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
-      - DEEPSEEK_BASE_URL=${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
-      - DEEPSEEK_MODEL=${DEEPSEEK_MODEL:-deepseek-chat}
-      - DATABASE_URL=mysql+pymysql://ecommerce:${DB_PASSWORD:-change-me}@db:3306/ecommerce?charset=utf8mb4
-      - REDIS_URL=redis://redis:6379/0
-      - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
+      APP_ENV: production
+      FLASK_DEBUG: "false"
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
+      DATABASE_URL: mysql+pymysql://ecommerce:${DB_PASSWORD:-change-me}@db:3306/ecommerce?charset=utf8mb4
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: "${SECRET_KEY:?SECRET_KEY must be set}"
+      JWT_SECRET: "${JWT_SECRET:?JWT_SECRET must be set}"
+      AGENT_JWT_SECRET: "${AGENT_JWT_SECRET:?AGENT_JWT_SECRET must be set}"
+      MULTIMODAL_OCR_ENGINE: ${MULTIMODAL_OCR_ENGINE:-auto}
+      MULTIMODAL_CLIP_MODEL: ${MULTIMODAL_CLIP_MODEL:-OFA-Sys/chinese-clip-vit-base-patch16}
+      MULTIMODAL_MIN_SCORE: ${MULTIMODAL_MIN_SCORE:-0.15}
+      # ── 高并发改造：检索服务化 + 任务模式 + gthread 抗长连接 ──
+      RAG_SERVICE_URL: http://rag:5001
+      CHAT_TASK_MODE: "1"
+      GUNICORN_WORKER_CLASS: gthread
+      GUNICORN_THREADS: "8"
+      GUNICORN_WORKERS: "4"
+    depends_on:
+      - db
+      - redis
+      - rag
+    restart: unless-stopped
+
+  # 独立检索服务：模型仅在rag进程加载一次，主应用不再被检索/重排阻塞
+  rag:
+    build: .
+    ports:
+      - "5001:5001"
+    volumes:
+      - ./data:/app/data
+      - ./index:/app/index
+      - ./qdrant_data:/app/qdrant_data
+    environment:
+      APP_ENV: production
+      FLASK_DEBUG: "false"
+      DATABASE_URL: mysql+pymysql://ecommerce:${DB_PASSWORD:-change-me}@db:3306/ecommerce?charset=utf8mb4
+      REDIS_URL: redis://redis:6379/0
+      # 向量存储：本地嵌入模式（无 Docker 依赖）；上量后改 QDRANT_URL 指向远程 Qdrant
+      QDRANT_LOCAL_PATH: /app/qdrant_data
+      # QDRANT_URL: http://qdrant:6333
     depends_on:
       - db
       - redis
     restart: unless-stopped
+    # Qdrant 本地模式为单进程锁：必须单 worker；远程 Qdrant 时可按需加 worker
+    command: gunicorn --bind 0.0.0.0:5001 --workers 1 --timeout 120 rag_service:app
 
   db:
     image: mysql:8.0

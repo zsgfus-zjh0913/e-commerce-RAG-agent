@@ -71,6 +71,10 @@ class SyncPipeline:
         else:
             self._state = {}
 
+    def has_state(self):
+        """是否存在历史同步状态（用于检测存储后端切换/数据丢失）。"""
+        return bool(self._state)
+
     def _save_state(self):
         self.state_path.write_text(
             json.dumps(self._state, ensure_ascii=False, indent=2),

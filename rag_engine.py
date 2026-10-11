@@ -4,6 +4,8 @@ import json
 import re
 import hashlib
 
+import redis_manager
+
 _rag_libs = os.environ.get("RAG_LIBS_PATH", r"C:\rag_libs")
 if os.path.isdir(_rag_libs):
     import site
@@ -17,6 +19,24 @@ import numpy as np
 os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
 
 import jieba
+
+
+def _model_cache_exists(model_name):
+    hf_home = os.environ.get(
+        "HF_HOME",
+        str(Path.home() / ".cache" / "huggingface"),
+    )
+    cache_root = Path(os.environ.get("HF_HUB_CACHE", Path(hf_home) / "hub"))
+    cache_name = "models--" + model_name.replace("/", "--")
+    return (cache_root / cache_name).exists()
+
+
+def _prefer_offline_cache(model_name):
+    cached = _model_cache_exists(model_name)
+    if cached:
+        os.environ["HF_HUB_OFFLINE"] = "1"
+    return cached
+
 
 CUSTOM_WORDS = [
     "尺码", "型号", "面料", "材质", "商品编号", "库存",
@@ -37,6 +57,7 @@ SUPPORTED_EXTENSIONS = {
     ".pdf", ".xlsx", ".xls", ".pptx", ".html", ".htm",
 }
 EMBEDDING_MODEL = "BAAI/bge-small-zh-v1.5"
+EMBEDDING_DIM = 512  # bge-small-zh-v1.5 向量维度
 RERANKER_MODEL = "BAAI/bge-reranker-base"
 
 CHUNK_MAX_LEN = 500
@@ -61,8 +82,8 @@ class RAGEngine:
         self._mode = "unknown"
 
         from retriever_store import NumpyTfidfStore, QdrantStore
-        if os.environ.get("QDRANT_URL"):
-            qd = QdrantStore(str(index_dir))
+        if os.environ.get("QDRANT_URL") or os.environ.get("QDRANT_LOCAL_PATH"):
+            qd = QdrantStore(str(index_dir), vector_size=EMBEDDING_DIM)
             self.store = qd if qd.available else NumpyTfidfStore(str(index_dir))
         else:
             self.store = NumpyTfidfStore(str(index_dir))
@@ -75,9 +96,18 @@ class RAGEngine:
     def encoder(self):
         if self._encoder is None:
             try:
+                cached = _prefer_offline_cache(EMBEDDING_MODEL)
                 from sentence_transformers import SentenceTransformer
                 print(f"[RAG] 加载嵌入模型 {EMBEDDING_MODEL} ...")
-                self._encoder = SentenceTransformer(EMBEDDING_MODEL)
+                try:
+                    self._encoder = SentenceTransformer(
+                        EMBEDDING_MODEL,
+                        local_files_only=True,
+                    )
+                except Exception:
+                    if cached:
+                        os.environ.pop("HF_HUB_OFFLINE", None)
+                    self._encoder = SentenceTransformer(EMBEDDING_MODEL)
                 self._mode = "vector"
                 print("[RAG] 向量检索模式已启用")
             except Exception as e:
@@ -90,9 +120,18 @@ class RAGEngine:
     def reranker(self):
         if self._reranker is None:
             try:
+                cached = _prefer_offline_cache(RERANKER_MODEL)
                 from sentence_transformers import CrossEncoder
                 print(f"[RAG] 加载重排序模型 {RERANKER_MODEL} ...")
-                self._reranker = CrossEncoder(RERANKER_MODEL)
+                try:
+                    self._reranker = CrossEncoder(
+                        RERANKER_MODEL,
+                        local_files_only=True,
+                    )
+                except Exception:
+                    if cached:
+                        os.environ.pop("HF_HUB_OFFLINE", None)
+                    self._reranker = CrossEncoder(RERANKER_MODEL)
                 print("[RAG] 重排序模型已启用")
             except Exception as e:
                 print(f"[RAG] 重排序模型加载失败: {e}")
@@ -117,15 +156,20 @@ class RAGEngine:
 
     def _load_or_sync(self):
         loaded = self.store.load()
-        if loaded:
+        if loaded and self.store.count() > 0:
             print(f"[RAG] 从磁盘加载索引: {self.store.count()} chunks")
         else:
-            print("[RAG] 首次运行，执行全量同步...")
+            print("[RAG] 首次运行或索引为空，执行全量同步...")
 
         from sync_pipeline import SyncPipeline
         self.sync = SyncPipeline(self, str(self.index_dir))
 
-        report = self.sync.sync_all()
+        if loaded and self.store.count() == 0 and self.sync.has_state():
+            # 存储后端为空但存在历史同步状态（如切换向量存储），需全量重建
+            print("[RAG] 存储后端为空但存在同步状态，执行全量重建...")
+            report = self.sync.full_resync()
+        else:
+            report = self._sync_and_invalidate()
         total = report.get("total", {})
         if total.get("added") or total.get("updated") or total.get("deleted"):
             print(f"[RAG] 增量同步: +{total.get('added',0)} ~{total.get('updated',0)} -{total.get('deleted',0)}, 总计 {total.get('chunks',0)} chunks")
@@ -137,7 +181,8 @@ class RAGEngine:
                 self._mode = "vector"
             else:
                 _ = self.encoder
-                if self.store.embeddings is None and self.store.count() > 0:
+                if (self.store.embeddings is None and self.store.count() > 0
+                        and not self.store.external_vectors):
                     self._embed_all_chunks()
                 self.store.persist()
 
@@ -165,8 +210,10 @@ class RAGEngine:
     def rebuild(self):
         """强制全量重同步。"""
         report = self.sync.full_resync()
-        if self.store.embeddings is None and self.encoder is not None:
+        if (self.store.embeddings is None and self.encoder is not None
+                and not self.store.external_vectors):
             self._embed_all_chunks()
+        self.invalidate_query_cache()
         total = report.get("total", {})
         print(f"[RAG] 全量重建完成: {total.get('chunks',0)} chunks, 模式={self._mode}")
 
@@ -294,19 +341,29 @@ class RAGEngine:
             return query + " " + " ".join(set(expansions))
         return query
 
-    def query(self, question, top_k=5, threshold=0.0):
+    def query(self, question, top_k=5, threshold=0.0, use_cache=True):
         if self.store.count() == 0:
             return []
+
+        # 检索结果缓存：热点问题（价格/运费/发货等）命中后跳过编码+检索+重排
+        cache_key = None
+        if use_cache:
+            cache_key = "ragq:" + hashlib.sha1(
+                f"{question}|{top_k}|{threshold}".encode("utf-8")
+            ).hexdigest()
+            cached = redis_manager.get_cache(cache_key)
+            if cached is not None:
+                return cached
 
         expanded = self._expand_query(question)
 
         q_emb = None
-        if self.encoder is not None and self.store.embeddings is not None:
+        if self.encoder is not None and self.store.supports_vector:
             q_emb = self.encoder.encode(
                 [expanded], normalize_embeddings=True
             )
 
-        tokenized_q = tokenize(expanded) if self.store.vectorizer is not None else None
+        tokenized_q = tokenize(expanded) if self.store.supports_lexical else None
 
         candidates = self.store.search(
             query_embedding=q_emb,
@@ -318,20 +375,39 @@ class RAGEngine:
         candidates = self._keyword_filter(question, candidates)
 
         if len(candidates) <= top_k:
-            return candidates[:top_k]
+            results = candidates[:top_k]
+        else:
+            reranker = self.reranker
+            if reranker is not None:
+                try:
+                    pairs = [[question, c["text"]] for c in candidates]
+                    rerank_scores = reranker.predict(pairs)
+                    for i, c in enumerate(candidates):
+                        c["rerank_score"] = float(rerank_scores[i])
+                    candidates.sort(key=lambda x: x["rerank_score"], reverse=True)
+                except Exception as e:
+                    print(f"[RAG] 重排序失败，使用粗排结果: {e}")
+            results = candidates[:top_k]
 
-        reranker = self.reranker
-        if reranker is not None:
-            try:
-                pairs = [[question, c["text"]] for c in candidates]
-                rerank_scores = reranker.predict(pairs)
-                for i, c in enumerate(candidates):
-                    c["rerank_score"] = float(rerank_scores[i])
-                candidates.sort(key=lambda x: x["rerank_score"], reverse=True)
-            except Exception as e:
-                print(f"[RAG] 重排序失败，使用粗排结果: {e}")
+        if cache_key is not None:
+            redis_manager.set_cache(cache_key, results, ttl=300)
 
-        return candidates[:top_k]
+        return results
+
+    def invalidate_query_cache(self):
+        """知识库变更后失效全部检索结果缓存。"""
+        redis_manager.delete_cache_prefix("ragq:")
+
+    def _sync_and_invalidate(self):
+        """执行增量同步，若有变更则失效检索缓存。"""
+        report = self.sync.sync_all()
+        total = report.get("total", {})
+        changed = bool(
+            total.get("added") or total.get("updated") or total.get("deleted")
+        )
+        if changed:
+            self.invalidate_query_cache()
+        return report
 
     def list_documents(self):
         docs = []
@@ -350,22 +426,35 @@ class RAGEngine:
         filepath = self.data_dir / filename
         filepath.write_bytes(content_bytes)
 
+        # 同名文档覆盖上传时，先清除旧知识片段，避免知识库重复
+        self.store.delete_by_source(filename)
+
         docs = self._load_file(filepath)
         new_chunks = []
         for text, meta in docs:
-            new_chunks.extend(
-                self._split_chunks(text, filepath.name, meta)
-            )
+            raw_chunks = self._split_chunks(text, filepath.name, meta)
+            # 与 sync_documents 的 chunk_id/source_id 规则保持一致，
+            # 保证按 source 删除与增量覆盖在向量存储中可定位
+            for i, chunk in enumerate(raw_chunks):
+                chunk["chunk_id"] = f"document:{filepath.name}:{i}"
+                chunk["source_id"] = filepath.name
+                chunk.setdefault("meta", {})["document_index"] = i
+            new_chunks.extend(raw_chunks)
         self._add_chunks_to_store(new_chunks)
         self.store.persist()
+        self.invalidate_query_cache()
         return filepath.name
 
     def delete_document(self, filename):
         filepath = self.data_dir / filename
         if filepath.exists() and filepath.is_file():
             filepath.unlink()
-            return self.store.delete_by_source(filename)
-        return False
+        # 文件可能已不在磁盘（如上次删除只清了文件没清向量），
+        # 仍按 source 清理向量存储中的孤儿 chunk
+        removed = self.store.delete_by_source(filename)
+        if removed:
+            self.invalidate_query_cache()
+        return removed
 
     def get_stats(self):
         return {

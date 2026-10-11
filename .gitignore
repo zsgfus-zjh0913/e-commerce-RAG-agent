@@ -21,3 +21,17 @@ node_modules/
 bat_test.log
 bat_test_err.log
 *.log
+# 向量库本地数据（含业务索引，不入库）
+qdrant_data/
+# IDE 与工具目录
+.idea/
+.vscode/
+.trae-html-share-packages/
+# 临时测试文件
+.tmp_redis_integration_test.py
+_tmp_*
+_bench_*
+_smoke_*
+_e2e_*
+_check_*
+_del_*

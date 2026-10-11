@@ -30,7 +30,11 @@ cp .env.example .env
 # DEEPSEEK_API_KEY=your_api_key
 # DATABASE_URL=mysql+pymysql://ecommerce:password@db:3306/ecommerce?charset=utf8mb4
 # REDIS_URL=redis://redis:6379/0
-# SECRET_KEY=your_random_secret
+# APP_ENV=production
+# FLASK_DEBUG=false
+# SECRET_KEY=<32位以上随机字符串>
+# JWT_SECRET=<另一条32位以上随机字符串>
+# AGENT_JWT_SECRET=<第三条32位以上随机字符串>
 ```
 
 ### 3. 创建数据库（MySQL）
@@ -57,11 +61,13 @@ python migrate_to_mysql.py
 ### 5. Docker 一键部署
 
 ```bash
-docker-compose up -d
+docker-compose up -d --build
 # 服务启动：
-# - app:    gunicorn (端口 5000)
+# - app:    gunicorn (端口 5000) —— 聊天/坐席主应用，gthread 8 线程抗长连接
+# - rag:    独立检索服务 (端口 5001) —— embedding/reranker 模型仅此进程加载，
+#            Qdrant 本地嵌入模式存储向量
 # - db:     MySQL 8.0 (端口 3306)
-# - redis:  Redis 7 (端口 6379)
+# - redis:  Redis 7 (端口 6379) —— 任务事件缓冲/缓存/限流
 # - nginx:  反向代理 + SSL (端口 80/443)
 ```
 
@@ -74,6 +80,10 @@ curl http://localhost/health
 # 预期输出：
 # {"status":"ok","database":{"type":"external","url":"localhost:3306/ecommerce"},
 #  "storage":{"redis_enabled":true,"storage_mode":"redis"},...}
+
+# 检索服务健康检查
+curl http://localhost:5001/health
+# {"status":"ok","chunks":196,"mode":"vector","store_type":"QdrantStore",...}
 ```
 
 ## 三、生产部署（裸机 + MySQL + Redis + Nginx）
@@ -101,7 +111,11 @@ pip install -r requirements.txt
 ```bash
 export DATABASE_URL="mysql+pymysql://ecommerce:password@localhost:3306/ecommerce?charset=utf8mb4"
 export REDIS_URL="redis://localhost:6379/0"
-export SECRET_KEY="your-random-secret-key"
+export APP_ENV="production"
+export FLASK_DEBUG="false"
+export SECRET_KEY="$(openssl rand -hex 32)"
+export JWT_SECRET="$(openssl rand -hex 32)"
+export AGENT_JWT_SECRET="$(openssl rand -hex 32)"
 export DEEPSEEK_API_KEY="your-api-key"
 ```
 
@@ -116,8 +130,17 @@ python migrate_to_mysql.py
 ### 5. 启动 Gunicorn
 
 ```bash
+# 主应用：gthread 抗长连接（任务模式已解耦 LLM 生成）
+export GUNICORN_WORKER_CLASS=gthread GUNICORN_THREADS=8 GUNICORN_WORKERS=4
 gunicorn -c gunicorn_config.py app:app
+
+# 独立检索服务（必须先于主应用就绪或与其并行启动，首次会同步数据库并构建向量索引）
+# 本地 Qdrant 单进程锁：必须单 worker
+gunicorn --bind 0.0.0.0:5001 --workers 1 --timeout 120 rag_service:app
 ```
+
+> 若未配置 `RAG_SERVICE_URL`，主应用自动回退为进程内 RAG 引擎（功能可用，
+> 但 embedding 模型会在每个 worker 加载一次，高并发能力下降——生产不建议）。
 
 ### 6. 配置 Nginx + HTTPS
 
@@ -134,9 +157,18 @@ sudo certbot --nginx -d your-domain.com
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
 | `DATABASE_URL` | 数据库连接（留空=SQLite） | 空 |
-| `REDIS_URL` | Redis 连接（留空=内存） | 空 |
+| `REDIS_URL` | Redis 连接；生产环境必须配置，用于限流、坐席黑名单、任务事件缓冲和会话共享 | 空（仅开发内存降级） |
 | `DEEPSEEK_API_KEY` | DeepSeek API Key | 空（离线模式） |
-| `SECRET_KEY` | JWT 签名密钥 | 内置默认 |
+| `RAG_SERVICE_URL` | 检索服务地址（`http://rag:5001`）；配置后主应用走 HTTP 检索，模型不在主进程加载 | 空（进程内 RAG，降级） |
+| `CHAT_TASK_MODE` | `1`=任务模式：提交秒回 task_id，LLM 生成后台执行，SSE 事件增量拉取 | 空（直连 SSE） |
+| `QDRANT_LOCAL_PATH` | Qdrant 本地嵌入模式路径（单进程锁，rag 服务必须单 worker） | 空（NumpyTfidfStore） |
+| `QDRANT_URL` | 远程 Qdrant 服务地址；与 LOCAL 二选一，支持更大并发 | 空 |
+| `POOL_SIZE` / `POOL_MAX_OVERFLOW` | MySQL 连接池大小/溢出上限（多 worker 时按预算） | 10 / 20 |
+| `GUNICORN_WORKERS` / `GUNICORN_THREADS` | Gunicorn worker 数 / 每 worker 线程数（gthread 模式抗长连接） | cpu×2+1 / 1 |
+| `APP_ENV` | 运行环境，生产必须为 `production` | `development` |
+| `SECRET_KEY` | Flask Session 签名密钥 | 仅开发默认 |
+| `JWT_SECRET` | 用户 JWT 签名密钥 | 仅开发默认 |
+| `AGENT_JWT_SECRET` | 坐席 JWT 签名密钥 | 仅开发默认 |
 | `FLASK_DEBUG` | 调试模式 | false |
 | `PORT` | 监听端口 | 5000 |
 
@@ -178,8 +210,11 @@ VALUES ('P009', '新产品', '品牌', '分类', '99.00', '描述', '100件', '{
 ### 重建 RAG 索引
 
 ```bash
+# NumpyTfidfStore 模式
 rm -rf index/
-# 重启服务，自动从数据库重建
+# Qdrant 本地模式：删除向量库目录（qdrant_data 在 docker-compose 中为独立卷）
+rm -rf qdrant_data/
+# 重启 rag 服务，自动从数据库全量重建
 ```
 
 ## 七、水平扩展

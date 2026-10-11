@@ -31,14 +31,19 @@ if IS_SQLITE:
         connect_args={"check_same_thread": False},
     )
 else:
+    # 连接池参数可通过环境变量覆盖（多 worker 部署时按 worker 数预算：
+    # 单 worker 峰值连接 = pool_size + max_overflow，需 < MySQL max_connections）
+    pool_size = int(os.environ.get("POOL_SIZE", "10"))
+    pool_max_overflow = int(os.environ.get("POOL_MAX_OVERFLOW", "20"))
     engine = create_engine(
         DATABASE_URL,
         echo=False,
         poolclass=QueuePool,
-        pool_size=10,
-        max_overflow=20,
+        pool_size=pool_size,
+        max_overflow=pool_max_overflow,
         pool_timeout=30,
-        pool_recycle=3600,
+        # 早于 MySQL wait_timeout(默认 8h) 回收，防止半开连接
+        pool_recycle=int(os.environ.get("POOL_RECYCLE", "2800")),
         pool_pre_ping=True,
     )
 

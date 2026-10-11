@@ -10,9 +10,13 @@ import jwt as pyjwt
 from datetime import datetime, timezone, timedelta
 from functools import wraps
 
-from flask import Blueprint, request, jsonify, render_template, make_response, g
+from flask import Blueprint, request, jsonify, render_template, make_response, g, current_app
 from database import get_db, close_db, Agent, Ticket, Order, AuditLog, ChatMessage, LearnedQA
+from runtime_config import get_secret
+from rag_engine import SUPPORTED_EXTENSIONS
+from security import validate_file_upload, sanitize_input
 import logger
+import redis_manager
 from qa_cache import get_cache
 
 agent_bp = Blueprint("agent", __name__)
@@ -25,10 +29,9 @@ TICKET_TYPE_ZH = {
     "after_sale": "售后",
 }
 
-JWT_SECRET = "ecommerce-agent-secret-2026"
+JWT_SECRET = get_secret("AGENT_JWT_SECRET", "ecommerce-agent-secret-2026")
 JWT_ALGO = "HS256"
 JWT_EXPIRY_HOURS = 12
-_blacklist = set()
 
 
 def create_agent_token(agent_id, username, name):
@@ -55,7 +58,7 @@ def agent_required(f):
         if not token:
             return jsonify({"error": "未登录"}), 401
         try:
-            if token in _blacklist:
+            if redis_manager.is_agent_token_blacklisted(token):
                 return jsonify({"error": "token已失效"}), 401
             payload = pyjwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGO])
             if payload.get("type") != "agent":
@@ -140,7 +143,9 @@ def agent_logout():
     if not token:
         token = request.cookies.get("agent_token")
     if token:
-        _blacklist.add(token)
+        redis_manager.blacklist_agent_token(
+            token, JWT_EXPIRY_HOURS * 3600
+        )
 
     db = get_db()
     try:
@@ -404,6 +409,78 @@ def agent_system_logs():
     return jsonify({"logs": logs})
 
 
+# ── 商品信息文档管理 ──
+
+@agent_bp.route("/api/agent/documents", methods=["GET"])
+@agent_required
+def agent_documents_list():
+    rag = current_app.rag
+    if rag is None:
+        return jsonify({"error": "RAG 引擎未初始化"}), 500
+    try:
+        return jsonify({
+            "documents": rag.list_documents(),
+            "stats": rag.get_stats(),
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@agent_bp.route("/api/agent/documents/upload", methods=["POST"])
+@agent_required
+def agent_documents_upload():
+    rag = current_app.rag
+    if rag is None:
+        return jsonify({"error": "RAG 引擎未初始化"}), 500
+    file = request.files.get("file")
+    if file is None or not file.filename:
+        return jsonify({"error": "未选择文件"}), 400
+
+    filename = file.filename.strip()
+    ok, msg = validate_file_upload(
+        filename, request.content_length or 0, SUPPORTED_EXTENSIONS
+    )
+    if not ok:
+        return jsonify({"error": msg}), 400
+
+    try:
+        content = file.read()
+        ok, msg = validate_file_upload(filename, len(content), SUPPORTED_EXTENSIONS)
+        if not ok:
+            return jsonify({"error": msg}), 400
+        rag.add_document(filename, content)
+        logger.audit(
+            "agent", request.agent["username"],
+            "document_upload", "document", filename,
+            f"上传商品信息文档 {filename} ({len(content)} bytes)"
+        )
+        return jsonify({"success": True, "name": filename, "size": len(content)})
+    except Exception as e:
+        return jsonify({"error": f"文档处理失败: {e}"}), 500
+
+
+@agent_bp.route("/api/agent/documents/<path:filename>", methods=["DELETE"])
+@agent_required
+def agent_documents_delete(filename):
+    rag = current_app.rag
+    if rag is None:
+        return jsonify({"error": "RAG 引擎未初始化"}), 500
+    if "/" in filename or "\\" in filename or ".." in filename:
+        return jsonify({"error": "非法文件名"}), 400
+    try:
+        ok = rag.delete_document(filename)
+        if not ok:
+            return jsonify({"error": "文档不存在"}), 404
+        logger.audit(
+            "agent", request.agent["username"],
+            "document_delete", "document", filename,
+            f"删除商品信息文档 {filename}"
+        )
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 # ── 会话管理：人工接入 ──
 
 @agent_bp.route("/api/agent/sessions", methods=["GET"])
@@ -625,7 +702,6 @@ def agent_end_session(ticket_id):
 
 
 # ── 已学问答缓存管理 ──
-
 @agent_bp.route("/api/agent/learned-qa", methods=["GET"])
 @agent_required
 def agent_learned_qa_list():

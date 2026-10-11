@@ -233,6 +233,25 @@
         .chat-send-btn:hover { background: #1a1a2e; }
         .chat-send-btn:disabled { background: #a0aec0; cursor: not-allowed; }
         .chat-empty { text-align: center; padding: 40px; color: #a0aec0; font-size: 14px; }
+        /* 商品文档管理 */
+        .doc-upload-area {
+            border: 2px dashed #cbd5e0; border-radius: 12px; padding: 36px 24px;
+            text-align: center; cursor: pointer; transition: all 0.3s;
+            background: #fafbfc;
+        }
+        .doc-upload-area:hover, .doc-upload-area.dragover {
+            border-color: #0f3460; background: #eef4fb;
+        }
+        .doc-upload-hint p { font-size: 15px; color: #4a5568; font-weight: 600; }
+        .doc-upload-sub { font-size: 12px; color: #a0aec0; font-weight: 400; margin-top: 6px; }
+        .doc-upload-status { margin-top: 12px; font-size: 13px; min-height: 18px; }
+        .doc-upload-status.error { color: #e53e3e; }
+        .doc-upload-status.success { color: #38a169; }
+        .doc-count-badge {
+            background: #0f3460; color: white; font-size: 11px;
+            padding: 1px 8px; border-radius: 10px; vertical-align: 2px;
+        }
+        .doc-stats { font-size: 12px; color: #718096; margin-bottom: 10px; }
         @media (max-width: 768px) {
             .stats-grid { grid-template-columns: repeat(2, 1fr); }
             .ticket-table, .order-table { font-size: 12px; }
@@ -260,6 +279,7 @@
         <button class="tab" onclick="switchTab('audit')">审计日志</button>
         <button class="tab" onclick="switchTab('logs')">系统日志</button>
         <button class="tab" onclick="switchTab('learnedqa')">已学问答</button>
+        <button class="tab" onclick="switchTab('docs')">商品文档</button>
     </div>
 
     <div class="content">
@@ -412,6 +432,35 @@
                 </table>
             </div>
         </div>
+
+        <!-- 商品文档管理 -->
+        <div class="tab-panel" id="panel-docs">
+            <div class="section">
+                <div class="section-title">上传商品信息文档</div>
+                <div class="doc-upload-area" id="doc-upload-area">
+                    <input type="file" id="doc-file-input" multiple
+                           accept=".txt,.md,.csv,.json,.docx,.pdf,.xlsx,.xls,.pptx,.html,.htm"
+                           style="display:none">
+                    <div class="doc-upload-hint">
+                        <p>点击选择或拖拽文件到此处上传</p>
+                        <p class="doc-upload-sub">支持 txt / md / csv / json / docx / pdf / xlsx / xls / pptx / html，单文件不超过 50MB</p>
+                    </div>
+                </div>
+                <div class="doc-upload-status" id="doc-upload-status"></div>
+            </div>
+            <div class="section">
+                <div class="section-title">已导入商品文档 <span class="doc-count-badge" id="doc-count">0</span></div>
+                <div class="doc-stats" id="doc-stats"></div>
+                <table class="log-table">
+                    <thead>
+                        <tr>
+                            <th>文件名</th><th>大小</th><th>修改时间</th><th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="docs-tbody"></tbody>
+                </table>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -440,6 +489,117 @@
                 .replace(/'/g, "&#39;");
         }
 
+        function fmtSize(bytes) {
+            if (bytes === null || bytes === undefined) return "-";
+            if (bytes < 1024) return bytes + " B";
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+            return (bytes / 1024 / 1024).toFixed(2) + " MB";
+        }
+
+        // ── 商品文档管理 ──
+        let documentsCache = [];
+
+        async function loadDocuments() {
+            try {
+                const res = await fetch("/api/agent/documents");
+                if (res.status === 401) { window.location.href = "/agent/login"; return; }
+                const data = await res.json();
+                documentsCache = data.documents || [];
+                document.getElementById("doc-count").textContent = documentsCache.length;
+                const stats = data.stats || {};
+                document.getElementById("doc-stats").textContent =
+                    `共 ${stats.total_chunks ?? 0} 个知识片段 | 检索模式: ${stats.mode ?? "-"}` +
+                    (stats.reranker_enabled ? "（含重排序）" : "") +
+                    (stats.store_type ? ` | 索引: ${stats.store_type}` : "");
+                const tbody = document.getElementById("docs-tbody");
+                if (documentsCache.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="4" class="empty-state">暂无商品文档，请上传</td></tr>';
+                    return;
+                }
+                tbody.innerHTML = "";
+                documentsCache.forEach((d, i) => {
+                    const tr = document.createElement("tr");
+                    tr.innerHTML = `
+                        <td>${esc(d.name)}</td>
+                        <td>${fmtSize(d.size)}</td>
+                        <td style="font-size:12px">${fmtTime(d.modified)}</td>
+                        <td><button class="action-btn reject" onclick="deleteDocument(${i})">删除</button></td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+            } catch (err) {
+                console.error("加载文档失败:", err);
+            }
+        }
+
+        function setupDocUpload() {
+            const area = document.getElementById("doc-upload-area");
+            const input = document.getElementById("doc-file-input");
+            area.addEventListener("click", () => input.click());
+            input.addEventListener("change", () => {
+                if (input.files.length) uploadFiles(input.files);
+            });
+            area.addEventListener("dragover", e => {
+                e.preventDefault();
+                area.classList.add("dragover");
+            });
+            area.addEventListener("dragleave", () => area.classList.remove("dragover"));
+            area.addEventListener("drop", e => {
+                e.preventDefault();
+                area.classList.remove("dragover");
+                if (e.dataTransfer.files.length) uploadFiles(e.dataTransfer.files);
+            });
+        }
+
+        async function uploadFiles(files) {
+            const input = document.getElementById("doc-file-input");
+            const status = document.getElementById("doc-upload-status");
+            for (const file of Array.from(files)) {
+                status.className = "";
+                status.textContent = `正在上传 ${file.name} ...`;
+                const fd = new FormData();
+                fd.append("file", file);
+                try {
+                    const res = await fetch("/api/agent/documents/upload", {
+                        method: "POST",
+                        body: fd,
+                    });
+                    const data = await res.json();
+                    if (data.success) {
+                        status.className = "success";
+                        status.textContent = `「${data.name}」上传成功，已同步到客服知识库（${fmtSize(data.size)}）`;
+                    } else {
+                        status.className = "error";
+                        status.textContent = `「${file.name}」上传失败: ${data.error || res.status}`;
+                    }
+                } catch (err) {
+                    status.className = "error";
+                    status.textContent = `「${file.name}」上传失败: ${err.message}`;
+                }
+            }
+            input.value = "";
+            loadDocuments();
+        }
+
+        async function deleteDocument(index) {
+            const doc = documentsCache[index];
+            if (!doc) return;
+            if (!confirm(`确定删除文档「${doc.name}」吗？删除后客服将无法再检索到其中的商品信息。`)) return;
+            try {
+                const res = await fetch(`/api/agent/documents/${encodeURIComponent(doc.name)}`, { method: "DELETE" });
+                if (res.status === 401) { window.location.href = "/agent/login"; return; }
+                const data = await res.json();
+                if (data.success) {
+                    alert("文档已删除，知识库已同步更新");
+                    loadDocuments();
+                } else {
+                    alert("删除失败: " + (data.error || ""));
+                }
+            } catch (err) {
+                alert("网络错误: " + err.message);
+            }
+        }
+
         function switchTab(name) {
             document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
             document.querySelectorAll(".tab-panel").forEach(p => p.classList.remove("active"));
@@ -452,6 +612,7 @@
             if (name === "audit") loadAuditLogs();
             if (name === "logs") loadSystemLogs();
             if (name === "learnedqa") loadLearnedQA();
+            if (name === "docs") loadDocuments();
             if (name !== "sessions") stopSessionPolling();
         }
 
@@ -1019,6 +1180,7 @@
         (async function init() {
             await loadAgentInfo();
             await loadDashboard();
+            setupDocUpload();
             setInterval(loadDashboard, 15000);
         })();
     </script>

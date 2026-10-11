@@ -567,7 +567,29 @@ async function sendMessage() {
         }
 
         const contentType = res.headers.get("content-type") || "";
-        if (contentType.includes("text/event-stream")) {
+        if (contentType.includes("application/json")) {
+            const data = await res.json();
+            if (data.task_id) {
+                // 任务模式：提交已接受，从任务流接口增量拉取事件
+                const streamRes = await fetch(
+                    `/api/query/task/${data.task_id}/stream`,
+                    { headers: { "Accept": "text/event-stream" } }
+                );
+                if (streamRes.status === 401) {
+                    window.location.href = "/login";
+                    return;
+                }
+                await handleSSEResponse(streamRes);
+            } else if (data.error) {
+                addMessage("bot", "出错了：" + data.error);
+            } else {
+                addMessage("bot", data.answer, data.sources);
+                if (isAcknowledgment(lastQuestion)) {
+                    setTimeout(showRatingWidget, 500);
+                }
+            }
+        } else if (contentType.includes("text/event-stream")) {
+            // 兼容直连 SSE 模式（CHAT_TASK_MODE=0）
             await handleSSEResponse(res);
         } else {
             addTypingIndicator();

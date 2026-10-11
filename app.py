@@ -1,13 +1,23 @@
 import os
 import json
+import re
 import time
 import uuid
 import hashlib
 import threading
+import concurrent.futures
 from pathlib import Path
 
 from dotenv import load_dotenv
 load_dotenv()
+
+from runtime_config import (
+    debug_enabled,
+    get_secret,
+    validate_production_config,
+)
+
+validate_production_config()
 
 from flask import (
     Flask, render_template, request, jsonify, send_from_directory,
@@ -37,7 +47,7 @@ init_db()
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024
-app.secret_key = os.environ.get("SECRET_KEY", os.environ.get("JWT_SECRET", "ecommerce-cs-secret-2026"))
+app.secret_key = get_secret("SECRET_KEY", "ecommerce-cs-secret-2026")
 app.register_blueprint(agent_bp)
 
 
@@ -101,9 +111,17 @@ CONFIG_FILE = BASE_DIR / "config.json"
 HISTORY_DIR = BASE_DIR / "histories"
 HISTORY_DIR.mkdir(parents=True, exist_ok=True)
 
-rag = RAGEngine(str(DATA_DIR), str(INDEX_DIR))
-_ = rag.encoder
-_ = rag.reranker
+RAG_SERVICE_URL = os.environ.get("RAG_SERVICE_URL", "").strip()
+if RAG_SERVICE_URL:
+    # 服务化模式：检索/重排在独立 rag_service 进程，主进程不加载模型
+    from rag_client import RAGServiceClient
+    rag = RAGServiceClient(RAG_SERVICE_URL)
+    print(f"[APP] RAG 服务模式: {RAG_SERVICE_URL}")
+else:
+    rag = RAGEngine(str(DATA_DIR), str(INDEX_DIR))
+    _ = rag.encoder
+    _ = rag.reranker
+app.rag = rag  # 供坐席蓝图访问（上传/删除商品文档）
 multimodal = ProductMultimodalEngine(str(DATA_DIR), str(INDEX_DIR))
 multimodal.ensure_catalog_index()
 
@@ -113,36 +131,51 @@ qa_cache = qa_cache.init_cache(lambda: rag.encoder)
 # ── Session / History 管理 ──────────────────────────────
 
 MAX_HISTORY_TURNS = 6
-_sessions = {}
-_sessions_lock = threading.Lock()
 
 
 def _get_session(session_id):
-    now = time.time()
-    with _sessions_lock:
-        expired = [sid for sid, s in _sessions.items()
-                   if now - s["last_active"] > 1800]
-        for sid in expired:
-            del _sessions[sid]
-        if session_id not in _sessions:
-            _sessions[session_id] = {"messages": [], "last_active": now}
-        else:
-            _sessions[session_id]["last_active"] = now
-        return _sessions[session_id]
+    return {
+        "messages": redis_manager.get_chat_session(session_id) or [],
+    }
 
 
 def _add_to_history(session_id, role, content):
-    session = _get_session(session_id)
-    session["messages"].append({"role": role, "content": content})
-    if len(session["messages"]) > MAX_HISTORY_TURNS:
-        session["messages"] = session["messages"][-MAX_HISTORY_TURNS:]
+    redis_manager.append_chat_message(
+        session_id,
+        {"role": role, "content": content},
+        max_items=MAX_HISTORY_TURNS,
+        ttl=1800,
+    )
 
 
 # ── 对话性问题检测 ─────────────────────────────────────
 
+# 业务诉求关键词：句子中包含这些词时，即使句首带"你好/谢谢"等寒暄语，
+# 也应视为有实际业务诉求，交给退款/转人工/检索等流程处理，而非纯对话回复
+BUSINESS_KEYWORDS = [
+    "退款", "退钱", "订单", "物流", "发货", "快递", "签收", "包裹",
+    "商品", "产品", "价格", "多少钱", "尺码", "库存", "有货", "缺货",
+    "换货", "退货", "人工", "售后", "保修", "优惠", "活动",
+    "满减", "折扣", "运费", "配送", "到货", "参数", "规格", "型号",
+    "下单", "购买", "优惠券", "发票", "评价", "补发", "换码",
+]
+
+
+def _strip_social(rest, patterns):
+    """移除寒暄词和语气词，返回剩余文本。用于判断句子是否为纯寒暄。"""
+    # 按长度降序移除，保证"客服在吗"先于"在吗"被整体移除，避免残留
+    for p in sorted(patterns, key=len, reverse=True):
+        rest = rest.replace(p, "")
+    for ch in " \t，。！？、,.!?~～呀啊吧呢吗的了啦哦哈嗯诶":
+        rest = rest.replace(ch, "")
+    return rest
+
+
 def _is_conversational(question):
     """检测是否为对话性问题（不需要RAG检索，直接回答）。"""
     q = question.lower().strip()
+    if any(b in q for b in BUSINESS_KEYWORDS):
+        return None
     identity_patterns = [
         "你是谁", "你叫什么", "你叫啥", "你是什么", "暖小助是谁",
         "你是机器人", "你是人还是机器", "你是ai", "你是人工智能",
@@ -165,9 +198,10 @@ def _is_conversational(question):
     for p in capability_patterns:
         if p in q:
             return "capability"
-    for p in greeting_patterns:
-        if p in q:
-            return "greeting"
+    # 问候语必须"整句纯粹"：移除问候词后不能残留实质内容。
+    # 否则"你好，我想买耳机"这类混合句会被误判为问候而吞掉真实诉求。
+    if _strip_social(q, greeting_patterns) == "":
+        return "greeting"
     for p in thanks_patterns:
         if p in q:
             return "thanks"
@@ -809,6 +843,123 @@ def api_settings():
         })
 
 
+# ── 聊天任务队列：SSE 长连接与计算解耦 ──────────────────
+# 任务模式下，POST /api/query 只做参数校验并提交后台线程池，
+# 立即返回 task_id；前端通过 /api/query/task/<id>/stream 增量拉取事件。
+# 长连接只做"读缓冲转发"，LLM 生成/检索在后台线程执行，worker 不再被长连接占死。
+
+CHAT_TASK_MODE = os.environ.get("CHAT_TASK_MODE", "1") == "1"
+CHAT_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+    max_workers=int(os.environ.get("CHAT_TASK_WORKERS", "16")),
+    thread_name_prefix="chat-task",
+)
+CHAT_TASK_TTL = 600
+_chat_tasks = {}
+_chat_tasks_lock = threading.Lock()
+
+
+def _task_buffer_create(task_id):
+    if redis_manager._is_redis_mode():
+        try:
+            redis_manager._get_redis().setex(
+                f"chat:task:{task_id}:meta", CHAT_TASK_TTL, "1"
+            )
+        except Exception:
+            pass
+        return
+    with _chat_tasks_lock:
+        now = time.time()
+        expired = [
+            k for k, t in _chat_tasks.items()
+            if now - t["created"] > CHAT_TASK_TTL
+        ]
+        for k in expired:
+            _chat_tasks.pop(k, None)
+        _chat_tasks[task_id] = {
+            "events": [], "done": False, "error": None, "created": now,
+        }
+
+
+def _task_buffer_append(task_id, event):
+    if redis_manager._is_redis_mode():
+        try:
+            r = redis_manager._get_redis()
+            pipe = r.pipeline()
+            pipe.rpush(f"chat:task:{task_id}:events", event)
+            pipe.expire(f"chat:task:{task_id}:events", CHAT_TASK_TTL)
+            pipe.execute()
+        except Exception:
+            pass
+        return
+    with _chat_tasks_lock:
+        t = _chat_tasks.get(task_id)
+        if t:
+            t["events"].append(event)
+
+
+def _task_buffer_mark_done(task_id, error=None):
+    if redis_manager._is_redis_mode():
+        try:
+            r = redis_manager._get_redis()
+            pipe = r.pipeline()
+            pipe.setex(
+                f"chat:task:{task_id}:done", CHAT_TASK_TTL,
+                json.dumps({"error": error}, ensure_ascii=False),
+            )
+            pipe.expire(f"chat:task:{task_id}:events", CHAT_TASK_TTL)
+            pipe.execute()
+        except Exception:
+            pass
+        return
+    with _chat_tasks_lock:
+        t = _chat_tasks.get(task_id)
+        if t:
+            t["done"] = True
+            t["error"] = error
+
+
+def _task_buffer_read(task_id, cursor=0):
+    """返回 (exists, events, done, error)。"""
+    if redis_manager._is_redis_mode():
+        try:
+            r = redis_manager._get_redis()
+            exists = bool(r.exists(f"chat:task:{task_id}:meta"))
+            events = r.lrange(f"chat:task:{task_id}:events", cursor, -1) or []
+            done_data = r.get(f"chat:task:{task_id}:done")
+            done = done_data is not None
+            error = None
+            if done_data:
+                try:
+                    error = json.loads(done_data).get("error")
+                except Exception:
+                    pass
+            return exists, events, done, error
+        except Exception:
+            return False, [], True, None
+    with _chat_tasks_lock:
+        t = _chat_tasks.get(task_id)
+        if t is None:
+            return False, [], True, None
+        return True, list(t["events"][cursor:]), t["done"], t.get("error")
+
+
+def _run_chat_task(task_id, gen_fn):
+    """后台线程执行生成器，事件逐条写入缓冲。"""
+    try:
+        for event in gen_fn():
+            _task_buffer_append(task_id, event)
+    except Exception as e:
+        try:
+            _task_buffer_append(
+                task_id,
+                f"data: {json.dumps({'type': 'error', 'data': str(e)}, ensure_ascii=False)}\n\n",
+            )
+        except Exception:
+            pass
+    finally:
+        _task_buffer_mark_done(task_id)
+
+
 # ── 聊天 API (含 Query 改写) ────────────────────────────
 
 @app.route("/api/query", methods=["POST"])
@@ -1140,6 +1291,50 @@ def api_query():
 
         yield f"data: {json.dumps({'type': 'conversation_id', 'data': conv_id}, ensure_ascii=False)}\n\n"
         yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
+
+    # 任务模式：立即返回 task_id，计算移交后台线程池，长连接不再占 worker
+    if CHAT_TASK_MODE:
+        task_id = str(uuid.uuid4())[:12]
+        _task_buffer_create(task_id)
+        CHAT_EXECUTOR.submit(_run_chat_task, task_id, generate)
+        return jsonify({"task_id": task_id, "mode": "task"})
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
+
+
+@app.route("/api/query/task/<task_id>/stream", methods=["GET"])
+@login_required
+def api_query_task_stream(task_id):
+    """从任务缓冲增量转发 SSE 事件（轻量读操作，长连接不执行计算）。"""
+    if not task_id or len(task_id) > 32 or not re.fullmatch(r"[A-Za-z0-9_-]+", task_id):
+        return jsonify({"error": "非法任务ID"}), 400
+
+    def generate():
+        cursor = 0
+        while True:
+            exists, events, done, error = _task_buffer_read(task_id, cursor)
+            if not exists:
+                yield f"data: {json.dumps({'type': 'error', 'data': '任务不存在或已过期，请重新发送'}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
+                return
+            for ev in events:
+                cursor += 1
+                yield ev
+            if done:
+                if error:
+                    yield f"data: {json.dumps({'type': 'error', 'data': error}, ensure_ascii=False)}\n\n"
+                if not events:
+                    yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
+                    return
+            time.sleep(0.15)
 
     return Response(
         stream_with_context(generate()),
@@ -1771,4 +1966,9 @@ if __name__ == "__main__":
     print(f"  坐席工作台: http://127.0.0.1:5000/agent/login")
     print(f"  访问地址: http://127.0.0.1:5000")
     print("=" * 60)
-    app.run(host="0.0.0.0", port=5000, debug=True, use_reloader=False)
+    app.run(
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", "5000")),
+        debug=debug_enabled(),
+        use_reloader=False,
+    )

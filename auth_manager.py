@@ -6,10 +6,11 @@ import bcrypt
 from datetime import datetime, timedelta, timezone
 
 from database import init_db, get_db, close_db, User, Session
+from runtime_config import get_secret
 
 init_db()
 
-JWT_SECRET = os.environ.get("JWT_SECRET", "ecommerce-cs-jwt-secret-2026")
+JWT_SECRET = get_secret("JWT_SECRET", "ecommerce-cs-jwt-secret-2026")
 JWT_ALGORITHM = "HS256"
 JWT_TTL_HOURS = 24
 BLACKLIST_CLEANUP_THRESHOLD = 86400

@@ -23,6 +23,15 @@ if os.path.isdir(_rag_libs):
 from database import Product, close_db, get_db
 
 
+def _model_cache_exists(model_name):
+    hf_home = os.environ.get(
+        "HF_HOME",
+        str(Path.home() / ".cache" / "huggingface"),
+    )
+    cache_root = Path(os.environ.get("HF_HUB_CACHE", Path(hf_home) / "hub"))
+    return (cache_root / ("models--" + model_name.replace("/", "--"))).exists()
+
+
 class ProductMultimodalEngine:
     """为商品知识库提供 OCR、图像向量和混合检索。"""
 
@@ -149,6 +158,9 @@ class ProductMultimodalEngine:
             return
         self._clip_attempted = True
         try:
+            cached = _model_cache_exists(self.DEFAULT_CLIP_MODEL)
+            if cached:
+                os.environ["HF_HUB_OFFLINE"] = "1"
             if "chinese-clip" in self.DEFAULT_CLIP_MODEL.lower():
                 from transformers import ChineseCLIPModel, ChineseCLIPProcessor
                 model_cls = ChineseCLIPModel
@@ -158,12 +170,24 @@ class ProductMultimodalEngine:
                 model_cls = CLIPModel
                 processor_cls = CLIPProcessor
 
-            self._clip_processor = processor_cls.from_pretrained(
-                self.DEFAULT_CLIP_MODEL
-            )
-            self._clip_model = model_cls.from_pretrained(
-                self.DEFAULT_CLIP_MODEL
-            )
+            try:
+                self._clip_processor = processor_cls.from_pretrained(
+                    self.DEFAULT_CLIP_MODEL,
+                    local_files_only=True,
+                )
+                self._clip_model = model_cls.from_pretrained(
+                    self.DEFAULT_CLIP_MODEL,
+                    local_files_only=True,
+                )
+            except Exception:
+                if cached:
+                    os.environ.pop("HF_HUB_OFFLINE", None)
+                self._clip_processor = processor_cls.from_pretrained(
+                    self.DEFAULT_CLIP_MODEL
+                )
+                self._clip_model = model_cls.from_pretrained(
+                    self.DEFAULT_CLIP_MODEL
+                )
             self._clip_model.eval()
             self.vector_provider = self.DEFAULT_CLIP_MODEL
         except Exception as exc:
