@@ -249,8 +249,62 @@ def _is_product_listing_query(question):
     return any(p in q for p in patterns)
 
 
-def _product_catalog_response():
-    """直接根据商品表中的实时目录生成自然、稳定的商品列表回答。"""
+# 品类口语词映射：问题中出现这些词时，商品目录回答只聚焦对应品类，
+# 避免用户问「有卖衣服吗」却收到全品类清单
+CATEGORY_KEYWORDS = [
+    (("女装", "男装", "童装"), ["衣服", "服装", "衣物", "上衣", "裤", "裙", "t恤", "外套", "衬衫", "针织", "牛仔裤", "风衣"]),
+    (("数码电子", "电子产品"), ["手机", "数码", "电子", "耳机", "平板", "手表", "键盘", "音箱", "充电宝"]),
+    (("家用电器",), ["家电", "洗衣机", "空调", "冰箱", "电视", "洗碗机", "电饭煲", "热水器", "空气炸锅"]),
+    (("食品饮料",), ["食品", "咖啡", "零食", "坚果", "饮料", "茶", "牛奶", "水果"]),
+    (("宠物用品",), ["宠物", "猫", "狗", "猫粮", "狗粮", "猫砂"]),
+    (("母婴用品",), ["母婴", "婴儿", "尿不湿", "奶粉", "奶瓶", "积木"]),
+    (("美妆", "美妆个护"), ["美妆", "护肤", "化妆品", "防晒", "洗面奶", "面霜"]),
+    (("个护",), ["个护", "电动牙刷", "吹风机"]),
+    (("运动户外",), ["运动", "健身", "瑜伽", "跑步", "篮球", "羽毛球", "户外"]),
+    (("家居用品",), ["家居", "家具", "枕头", "台灯", "加湿器", "收纳", "书桌"]),
+    (("箱包",), ["箱包", "背包", "书包", "挎包", "手提包", "包包"]),
+    (("其他",), ["空调", "采暖", "热泵"]),
+]
+
+
+def _match_catalog_categories(question):
+    """从问题中提取商品品类意图；无明确品类指向时返回 None。"""
+    if not question:
+        return None
+    q = question.lower()
+    for cats, kws in CATEGORY_KEYWORDS:
+        for kw in kws:
+            if kw in q:
+                return cats
+    return None
+
+
+def _is_category_query(question):
+    """识别「有什么X吗 / 有卖X吗 / 有没有X」这类品类存在性/枚举问法。
+
+    RAG 文本检索对泛品类词召回不可靠（「电子产品」可能只召回服装类 chunk，
+    导致 LLM 误答「没有电子产品」），此类问题必须走确定性数据库品类查询。
+    仅当品类词出现在「有/卖」等存在性动词之后才算，避免误吞
+    「T恤有加大码吗」「这个咖啡有多少包啊」这类属性/规格问法。
+    """
+    if not question:
+        return False
+    q = question.lower()
+    if _match_catalog_categories(question) is None:
+        return False
+    for i, ch in enumerate(q):
+        if ch in "有卖":
+            if _match_catalog_categories(q[i:]) is not None:
+                return True
+    return False
+
+
+def _product_catalog_response(question=None):
+    """按品类生成商品目录回答。
+
+    无明确品类时输出全品类概览（经营范围类提问）；问题中带品类词
+    （衣服/咖啡/手机等）时只聚焦对应品类，回答存在性并列出该品类全部商品。
+    """
     db = get_db()
     try:
         products = db.query(Product).order_by(Product.category, Product.id).all()
@@ -260,14 +314,32 @@ def _product_catalog_response():
     if not products:
         return "目前暂时没有可展示的在售商品，您可以稍后再来看看。"
 
-    lines = ["目前在售卖的产品有："]
-    for index, product in enumerate(products, 1):
-        price = (product.price or "").strip()
-        price_text = f"，{price}元" if price else ""
-        category = f"（{product.category}）" if product.category else ""
-        lines.append(f"{index}. {product.name}{category}{price_text}")
+    by_cat = {}
+    for p in products:
+        cat = p.category or "其他"
+        by_cat.setdefault(cat, []).append(p)
+
+    matched = _match_catalog_categories(question)
+    if matched:
+        focused = {cat: items for cat, items in by_cat.items() if cat in matched}
+        if not focused:
+            all_cats = "、".join(sorted(by_cat))
+            return f"目前本店暂未上架该类商品。本店主营品类有：{all_cats}。想了解某类商品直接告诉我名称就可以～"
+        lines = ["有的～本店在售相关商品如下："]
+        for cat, items in sorted(focused.items()):
+            names = "、".join(p.name for p in items)
+            lines.append(f"· **{cat}**：{names}")
+        lines.append("")
+        lines.append("想了解价格、规格或库存，告诉我商品名称（或编号）就可以。")
+        return "\n".join(lines)
+
+    lines = ["目前在售商品共 %d 款，涵盖以下品类：" % len(products)]
+    for cat, items in sorted(by_cat.items()):
+        names = "、".join(p.name for p in items[:3])
+        suffix = f"等 {len(items)} 款" if len(items) > 3 else ""
+        lines.append(f"· **{cat}**：{names}{suffix}")
     lines.append("")
-    lines.append("如果您想了解某款产品的价格、规格或库存，直接告诉我商品名称就可以。")
+    lines.append("想了解某款商品的价格、规格或库存，直接告诉我商品名称（或编号）就可以。")
     return "\n".join(lines)
 
 
@@ -1106,9 +1178,16 @@ def api_query():
             yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
             return
 
-        # ── 商品目录查询：直接按商品表生成自然列表，避免模型自由发挥 ──
-        if _is_product_listing_query(question):
-            answer = _product_catalog_response()
+        # ── 商品目录查询：按品类生成概览，避免模型自由发挥/逐条罗列 ──
+        # 同时接住「有什么X吗/有卖X吗」品类存在性问法（RAG 对泛品类词召回不可靠）
+        if _is_product_listing_query(question) or _is_category_query(question):
+            # 「卖什么agent/机器人/AI」带有身份歧义：先介绍客服自身，再补主营品类，
+            # 覆盖「你在卖什么」与「你这个客服 agent 是做什么的」两种意图
+            if any(k in question.lower() for k in ("agent", "机器人", " ai ", "的ai", "ai？", "ai?")):
+                answer = _conversational_response("identity") + "\n\n" + _product_catalog_response(question)
+            else:
+                # 问题带品类词（衣服/咖啡/手机…）时只回答对应品类，否则全品类概览
+                answer = _product_catalog_response(question)
             sources = [{"source": PRODUCT_DOCUMENT_NAME}]
             yield f"data: {json.dumps({'type': 'sources', 'data': sources}, ensure_ascii=False)}\n\n"
             for i in range(0, len(answer), 20):
@@ -1237,7 +1316,10 @@ def api_query():
             save_conversation(username, conv_id, conv)
             _add_to_history(session_id, "user", question)
             _add_to_history(session_id, "assistant", answer_text)
-            if not llm_error and answer_text:
+            # 仅在检索有知识库来源时写入自学习缓存：
+            # 无检索结果的 LLM 自由发挥最容易产生幻觉（如「没有咖啡」），
+            # 一旦固化会污染缓存，后续相似问题全部复用错误答案
+            if not llm_error and answer_text and results:
                 qa_cache.store(question, answer_text, "llm")
 
         # ── 无 API Key：离线 RAG 检索 ──
