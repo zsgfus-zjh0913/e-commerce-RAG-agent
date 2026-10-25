@@ -355,6 +355,7 @@
                 <div class="chat-panel">
                     <div class="chat-panel-header">
                         <span id="chat-user-name">用户</span>
+                        <button class="btn-end" onclick="handoverSession()">切回AI</button>
                         <button class="btn-end" onclick="endSession()">结束会话</button>
                     </div>
                     <div class="chat-session-bar">
@@ -1132,6 +1133,28 @@
                 }
                 loadSessions();
                 loadDashboard();
+            } catch (err) {
+                alert("网络错误: " + err.message);
+            }
+        }
+
+        async function handoverSession() {
+            if (!activeSessionId || !canReplyToSession) return;
+            if (!confirm("确定将会话切回 AI 客服继续服务吗？")) return;
+            try {
+                const res = await fetch(`/api/agent/ticket/${activeSessionId}/handover`, { method: "POST" });
+                const data = await res.json();
+                if (data.success) {
+                    if (agentPollTimer) { clearInterval(agentPollTimer); agentPollTimer = null; }
+                    activeSessionId = null;
+                    activeSessionTicket = null;
+                    canReplyToSession = false;
+                    document.getElementById("chat-container").style.display = "none";
+                    loadSessions();
+                    loadDashboard();
+                } else {
+                    alert("切回失败: " + (data.error || ""));
+                }
             } catch (err) {
                 alert("网络错误: " + err.message);
             }

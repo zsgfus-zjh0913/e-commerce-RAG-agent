@@ -284,6 +284,60 @@ class LLMClient:
             })
         return {"content": content, "raw_message": msg, "tool_calls": calls}, None
 
+    def assess_emotion(self, question, history=None):
+        """情绪/风险判断（结合多轮上下文），返回 dict {"level","tags","reason"} 或 None。"""
+        system = (
+            "你是电商客服系统的情绪安全检测助手。请结合用户消息与对话历史判断其情绪与风险等级。\n"
+            "仅输出 JSON，不要解释，格式：{\"level\": \"ok|soft|medium|hard\", \"tags\": [\"愤怒\"], \"reason\": \"一句话\"}。\n"
+            "等级含义：ok=正常；soft=轻微不满/急躁；medium=愤怒/威胁/投诉升级；hard=自残/极端情绪/强烈攻击。\n"
+            "tags 使用简短中文短语（如 愤怒、绝望、威胁、投诉升级、自残风险），可空数组。"
+        )
+        messages = [{"role": "system", "content": system}]
+        if history:
+            for msg in history[-4:]:
+                content = msg.get("content", "")
+                if len(content) > 200:
+                    content = content[:200] + "..."
+                messages.append({"role": msg["role"], "content": content})
+        messages.append({"role": "user", "content": question})
+        try:
+            result = self._call_api(messages, stream=False, max_tokens=128)
+            msg, error = self._parse_content(result)
+            if error or msg is None:
+                return None
+            raw = (msg.get("content") or "").strip()
+            # 去掉可能包裹的代码块标记
+            if raw.startswith("```"):
+                raw = raw.strip("`").strip()
+                if raw.startswith("json"):
+                    raw = raw[4:].strip()
+            return json.loads(raw)
+        except Exception:
+            return None
+
+    def summarize_transfer(self, question, history=None):
+        """生成转人工前的 AI 预判摘要（用于打包给坐席）。返回文本或 None。"""
+        system = (
+            "你是电商客服系统的人工转接摘要助手。请根据用户消息与对话历史，用两三句话概括："
+            "用户诉求、情感状态、需要人工重点处理的事项。只输出摘要文本，不要加其它解释。"
+        )
+        messages = [{"role": "system", "content": system}]
+        if history:
+            for msg in history[-6:]:
+                content = msg.get("content", "")
+                if len(content) > 200:
+                    content = content[:200] + "..."
+                messages.append({"role": msg["role"], "content": content})
+        messages.append({"role": "user", "content": question})
+        try:
+            result = self._call_api(messages, stream=False, max_tokens=256)
+            msg, error = self._parse_content(result)
+            if error or msg is None:
+                return None
+            return (msg.get("content") or "").strip() or None
+        except Exception:
+            return None
+
     def answer_with_tools(
         self, question, history=None,
         assistant_tool_message=None, tool_messages=None, max_tokens=1024,

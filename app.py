@@ -35,7 +35,7 @@ from auth_manager import AuthManager
 from database import init_db, get_db, close_db, Ticket, Order, Product, ChatMessage, IS_SQLITE, DATABASE_URL
 from security import (
     apply_security_headers, sanitize_input, is_malicious_input,
-    rate_limit, validate_file_upload,
+    rate_limit, validate_file_upload, classify_content_safety,
 )
 from agent_routes import agent_bp
 from multimodal_engine import ProductMultimodalEngine
@@ -562,6 +562,114 @@ def _create_ticket(username, ticket_type, subject, description="", order_id=""):
         close_db(db)
 
 
+# ── 人工转接上下文打包 ─────────────────────────────────
+
+def _append_ticket_message(ticket_id, sender, message):
+    """向工单写入一条会话消息，供坐席/用户双端轮询可见。"""
+    db = get_db()
+    try:
+        db.add(ChatMessage(
+            ticket_id=ticket_id, sender=sender, message=message,
+            created_at=int(time.time()),
+        ))
+        db.commit()
+    except Exception:
+        db.rollback()
+    finally:
+        close_db(db)
+
+
+def _extract_collected_fields(question, history):
+    """从当前消息与多轮上下文提取已收集的结构化信息（订单号/手机号等）。"""
+    combined = question or ""
+    for m in (history or []):
+        combined += "\n" + (m.get("content") or "")
+    fields = {}
+    order_id = _extract_order_id(question or "") or _extract_order_id(combined)
+    if order_id:
+        fields["订单号"] = order_id
+    m = re.search(r'1[3-9]\d{9}', combined)
+    if m:
+        fields["手机号"] = m.group(0)
+    return fields
+
+
+def _heuristic_transfer_summary(question):
+    """无可调用 LLM 时的转接摘要兜底（基于意图词）。"""
+    q = question or ""
+    if _is_refund_intent(q):
+        return "用户涉及退款/退钱诉求，需人工核对退款进度或处理退款争议。"
+    if _is_order_query(q):
+        return "用户涉及订单/物流问题，需人工查询订单或处理物流异常。"
+    if any(w in q for w in ("投诉", "维权", "曝光", "报警", "315")):
+        return "用户情绪强烈并有投诉升级倾向，需人工优先安抚并明确处理方案。"
+    if any(w in q for w in ("尺码", "换货", "退货", "售后", "换码")):
+        return "用户咨询售后/换退换货相关问题，需人工确认具体处理流程。"
+    return "用户要求转人工，具体诉求以对话记录为准。"
+
+
+def _build_transfer_context(question, history, reason="用户要求人工", risk_tags=None):
+    """打包转人工上下文：已收集字段 + AI/启发式摘要 + 风险标签。返回 (description, order_id)。"""
+    fields = _extract_collected_fields(question, history)
+    order_id = fields.get("订单号", "")
+
+    summary = None
+    if api_key:
+        try:
+            summary = LLMClient(api_key).summarize_transfer(question, history)
+        except Exception:
+            summary = None
+    if not summary:
+        summary = _heuristic_transfer_summary(question)
+
+    lines = [f"【转接原因】{reason}"]
+    if risk_tags:
+        lines.append("【风险标签】" + "、".join(risk_tags))
+    lines.append("【AI 预判摘要】" + summary)
+    lines.append("【已收集信息】")
+    if fields:
+        for k, v in fields.items():
+            lines.append(f"- {k}：{v}")
+    else:
+        lines.append("- （暂无明确结构化信息）")
+    lines.append("【当前消息】" + (question or "")[:500])
+    return "\n".join(lines), order_id
+
+
+def _create_transfer_ticket(username, question, history, reason, risk_tags, session_id):
+    """创建转人工工单并登记 AI/人工控制权状态（排队 → 待坐席接入）。"""
+    description, order_id = _build_transfer_context(question, history, reason, risk_tags)
+    subject = (risk_tags[0] if risk_tags else reason) + " - " + (question or "")[:40]
+    ticket = _create_ticket(username, "human_agent", subject, description, order_id=order_id)
+    if ticket:
+        redis_manager.set_human_state(username, {
+            "ticket_id": ticket["ticket_id"],
+            "session_id": session_id or "",
+            "mode": "queued",
+            "agent": None,
+            "taken_at": int(time.time()),
+        })
+    return ticket
+
+
+def _emit_answer_and_finish(question, answer, conv, conv_id, username, session_id, audit=None):
+    """generate() 内部复用：输出最终回答并落盘会话/历史（供各早退分支调用）。"""
+    yield f"data: {json.dumps({'type': 'sources', 'data': []}, ensure_ascii=False)}\n\n"
+    for i in range(0, len(answer), 20):
+        yield f"data: {json.dumps({'type': 'delta', 'data': answer[i:i+20]}, ensure_ascii=False)}\n\n"
+        time.sleep(0.03)
+    conv["messages"].append({"role": "user", "content": question})
+    conv["messages"].append({"role": "assistant", "content": answer})
+    conv["updated_at"] = time.time()
+    save_conversation(username, conv_id, conv)
+    _add_to_history(session_id, "user", question)
+    _add_to_history(session_id, "assistant", answer)
+    if audit:
+        logger.audit(*audit)
+    yield f"data: {json.dumps({'type': 'conversation_id', 'data': conv_id}, ensure_ascii=False)}\n\n"
+    yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
+
+
 # ── 业务实时数据（Function Calling）支持 ─────────────────
 # 接入真实业务系统后，工具的查询来源统一在 business_tools.py 中适配，
 # 本段（门控/决策/兜底）无需改动。
@@ -1086,6 +1194,60 @@ def api_query():
     def generate():
         global api_key
         search_question = question
+        hs = redis_manager.get_human_state(username)
+
+        # ── 人工接管中：AI 暂停主答，用户消息转达坐席（强介入） ──
+        if hs and hs.get("mode") == "active" and hs.get("ticket_id"):
+            _append_ticket_message(hs["ticket_id"], "user", question)
+            answer = "当前已由人工客服为您接待，您的消息已转达坐席，请稍候人工回复。"
+            yield from _emit_answer_and_finish(
+                question, answer, conv, conv_id, username, session_id,
+                audit=("user", username, "forward_to_agent", "ticket", hs["ticket_id"],
+                       f"人工接管中转发消息: {question[:80]}"),
+            )
+            return
+
+        # ── 敏感内容 / 情绪风险分级拦截 ──
+        llm_assess = (lambda q, h: LLMClient(api_key).assess_emotion(q, h)) if api_key else None
+        moderation = classify_content_safety(question, conv_history, llm_assess)
+
+        if moderation["blocked"]:
+            # 违规内容：硬拦截，不转人工、不调用 LLM（防止对线激化）
+            answer = "很抱歉，您的消息包含不便处理的内容。如有业务问题，欢迎换一种方式描述，我会继续为您服务。"
+            yield from _emit_answer_and_finish(
+                question, answer, conv, conv_id, username, session_id,
+                audit=("user", username, "moderation_block", "chat", conv_id,
+                       f"拦截违规内容: {question[:80]}"),
+            )
+            return
+
+        if moderation["level"] in ("hard", "medium"):
+            # 重度=立即转人工+暂停 AI；中度=预警+主动转人工
+            ticket = ({"ticket_id": hs["ticket_id"]}
+                      if hs and hs.get("ticket_id") else
+                      _create_transfer_ticket(username, question, conv_history,
+                                              "情绪风险自动转接", moderation["tags"], session_id))
+            if moderation["level"] == "hard":
+                answer = ("非常理解您此刻的心情，我已为您紧急接通人工客服"
+                          f"（工单号：{ticket['ticket_id'] if ticket else '待分配'}），"
+                          "请稍候，人工客服会优先为您处理。")
+            else:
+                answer = ("您的问题已为您记录并升级到人工客服优先处理"
+                          f"（工单号：{ticket['ticket_id'] if ticket else '待分配'}），请稍候。")
+            if ticket:
+                yield f"data: {json.dumps({'type': 'ticket', 'data': ticket}, ensure_ascii=False)}\n\n"
+            yield from _emit_answer_and_finish(
+                question, answer, conv, conv_id, username, session_id,
+                audit=("user", username, "moderation_transfer", "ticket",
+                       (ticket or {}).get("ticket_id", ""),
+                       f"情绪风险{moderation['level']}转人工: {question[:80]}"),
+            )
+            return
+
+        if moderation["level"] == "soft":
+            # 轻度情绪：安抚但继续由 AI 服务，仅记录命中供阈值迭代
+            logger.audit("user", username, "moderation_soft", "chat", conv_id,
+                         f"情绪轻触发(继续服务): {question[:80]}")
 
         # ── 对话性问题：跳过RAG，直接处理 ──
         conv_kind = _is_conversational(question)
@@ -1162,31 +1324,23 @@ def api_query():
             yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
             return
 
-        # ── 转人工意图：创建工单，等待人工接入 ──
+        # ── 转人工意图：打包上下文 → 工单，等待人工接入 ──
         if _is_human_agent_intent(question):
-            ticket = _create_ticket(username, "human_agent", question[:200], question)
+            ticket = ({"ticket_id": hs["ticket_id"]}
+                      if hs and hs.get("ticket_id") else
+                      _create_transfer_ticket(username, question, conv_history,
+                                              "用户要求人工", [], session_id))
             if ticket:
                 answer = (
                     f"正在为您转接人工客服（工单号：{ticket['ticket_id']}）。\n\n"
                     f"人工客服将尽快接入，请稍候...\n"
                     f"在等待期间，您仍然可以继续向我提问，我会尽力为您解答。"
                 )
+                yield f"data: {json.dumps({'type': 'ticket', 'data': ticket}, ensure_ascii=False)}\n\n"
             else:
                 answer = "转接人工客服失败，请稍后重试。"
-            yield f"data: {json.dumps({'type': 'ticket', 'data': ticket}, ensure_ascii=False)}\n\n"
-            yield f"data: {json.dumps({'type': 'sources', 'data': []}, ensure_ascii=False)}\n\n"
-            for i in range(0, len(answer), 20):
-                chunk = answer[i:i+20]
-                yield f"data: {json.dumps({'type': 'delta', 'data': chunk}, ensure_ascii=False)}\n\n"
-                time.sleep(0.03)
-            conv["messages"].append({"role": "user", "content": question})
-            conv["messages"].append({"role": "assistant", "content": answer})
-            conv["updated_at"] = time.time()
-            save_conversation(username, conv_id, conv)
-            _add_to_history(session_id, "user", question)
-            _add_to_history(session_id, "assistant", answer)
-            yield f"data: {json.dumps({'type': 'conversation_id', 'data': conv_id}, ensure_ascii=False)}\n\n"
-            yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
+            yield from _emit_answer_and_finish(
+                question, answer, conv, conv_id, username, session_id)
             return
 
         # ── 商品目录查询：按品类生成概览，避免模型自由发挥/逐条罗列 ──

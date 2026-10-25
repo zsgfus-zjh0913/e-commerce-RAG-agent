@@ -519,17 +519,25 @@ def agent_sessions():
 @agent_bp.route("/api/agent/ticket/<ticket_id>/accept", methods=["POST"])
 @agent_required
 def agent_accept_ticket(ticket_id):
-    """坐席接入人工会话"""
+    """坐席接入人工会话：会话级互斥 + 接管状态机（queued → active）。"""
+    lock_key = f"ticket:takeover:{ticket_id}"
+    if not redis_manager.acquire_lock(lock_key, request.agent["username"], ttl=12 * 3600):
+        return jsonify({"error": "该会话已被其他坐席接入"}), 409
+
     db = get_db()
     try:
         ticket = db.query(Ticket).filter(Ticket.ticket_id == ticket_id).first()
         if not ticket:
+            redis_manager.release_lock(lock_key, request.agent["username"])
             return jsonify({"error": "工单不存在"}), 404
         if ticket.ticket_type not in LIVE_SESSION_TYPES:
+            redis_manager.release_lock(lock_key, request.agent["username"])
             return jsonify({"error": "该工单不支持人工会话"}), 400
         if ticket.status == "approved":
+            redis_manager.release_lock(lock_key, request.agent["username"])
             return jsonify({"error": "该工单已被其他坐席接入"}), 400
         if ticket.status not in ("pending",):
+            redis_manager.release_lock(lock_key, request.agent["username"])
             return jsonify({"error": "工单状态不允许接入"}), 400
 
         ticket.status = "approved"
@@ -550,15 +558,26 @@ def agent_accept_ticket(ticket_id):
         db.add(greeting_message)
         db.commit()
 
+        # 接管状态机：AI 暂停主答，转入人工服务（active）
+        hs = redis_manager.get_human_state(ticket.username) or {}
+        redis_manager.set_human_state(ticket.username, {
+            "ticket_id": ticket_id,
+            "session_id": hs.get("session_id", "") if isinstance(hs, dict) else "",
+            "mode": "active",
+            "agent": request.agent["username"],
+            "taken_at": int(time.time()),
+        })
+
         logger.audit(
             "agent", request.agent["username"],
             "ticket_accept", "ticket", ticket_id,
-            f"坐席接入人工会话 {ticket_id}"
+            f"坐席接管人工会话 {ticket_id}（AI 暂停，转入人工服务）"
         )
 
         return jsonify({"success": True, "ticket": ticket.to_dict()})
     except Exception as e:
         db.rollback()
+        redis_manager.release_lock(lock_key, request.agent["username"])
         return jsonify({"error": str(e)}), 500
     finally:
         close_db(db)
@@ -661,7 +680,7 @@ def agent_chat_messages(ticket_id):
 @agent_bp.route("/api/agent/ticket/<ticket_id>/end", methods=["POST"])
 @agent_required
 def agent_end_session(ticket_id):
-    """坐席结束人工会话"""
+    """坐席结束人工会话（action=结束，不再切回 AI）"""
     db = get_db()
     try:
         ticket = db.query(Ticket).filter(Ticket.ticket_id == ticket_id).first()
@@ -684,10 +703,76 @@ def agent_end_session(ticket_id):
         db.add(closing_message)
         db.commit()
 
+        # 结束人工接管：清除控制权状态、释放互斥锁，AI 可恢复（新会话）服务
+        redis_manager.clear_human_state(ticket.username)
+        redis_manager.release_lock(f"ticket:takeover:{ticket_id}", ticket.handled_by)
+
         logger.audit(
             "agent", request.agent["username"],
             "session_end", "ticket", ticket_id,
             f"坐席结束人工会话 {ticket_id}"
+        )
+
+        return jsonify({
+            "success": True,
+            "message": closing_message.to_dict(),
+        })
+    except Exception as e:
+        db.rollback()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        close_db(db)
+
+
+@agent_bp.route("/api/agent/ticket/<ticket_id>/handover", methods=["POST"])
+@agent_required
+def agent_handover_session(ticket_id):
+    """坐席将会话切回 AI：AI 恢复主答，并能接住人工补充的新信息。"""
+    db = get_db()
+    try:
+        ticket = db.query(Ticket).filter(Ticket.ticket_id == ticket_id).first()
+        if not ticket:
+            return jsonify({"error": "工单不存在"}), 404
+        if ticket.handled_by and ticket.handled_by != request.agent["username"]:
+            return jsonify({"error": "该会话已由其他坐席处理"}), 403
+        if ticket.status not in ("approved", "pending"):
+            return jsonify({"error": "工单状态不允许切回"}), 400
+
+        hs = redis_manager.get_human_state(ticket.username) or {}
+        session_id = hs.get("session_id", "") if isinstance(hs, dict) else ""
+
+        # 收集本次人工会话中坐席的回复（用于接住人工补充信息）
+        handover_note = "本次人工处理完成。"
+        msgs = db.query(ChatMessage).filter(
+            ChatMessage.ticket_id == ticket_id,
+            ChatMessage.sender == "agent",
+        ).order_by(ChatMessage.id.asc()).all()
+        if msgs:
+            notes = [m.message for m in msgs if m.message]
+            if notes:
+                handover_note = "人工客服补充：" + " ".join(notes)[:400]
+
+        ticket.status = "resolved"
+        ticket.updated_at = int(time.time())
+        closing_message = ChatMessage(
+            ticket_id=ticket_id,
+            sender="agent",
+            message="已为您切回 AI 客服继续服务，AI 将结合刚才的沟通继续为您解答。",
+            created_at=int(time.time()),
+        )
+        db.add(closing_message)
+        db.commit()
+
+        # 清除人工接管状态，AI 恢复主答；并把人工补充信息接入 AI 上下文
+        redis_manager.clear_human_state(ticket.username)
+        redis_manager.release_lock(f"ticket:takeover:{ticket_id}", ticket.handled_by)
+        if session_id:
+            redis_manager.append_chat_message(session_id, {"role": "assistant", "content": handover_note})
+
+        logger.audit(
+            "agent", request.agent["username"],
+            "session_handover", "ticket", ticket_id,
+            f"坐席切回 AI 继续服务 {ticket_id}"
         )
 
         return jsonify({

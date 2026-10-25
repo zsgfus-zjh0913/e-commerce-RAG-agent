@@ -342,6 +342,76 @@ def is_agent_token_blacklisted(token):
         return bool(data.get("value"))
 
 
+# ── 会话级互斥锁（防抢单/双写） ──
+
+def acquire_lock(key, owner, ttl=30):
+    """原子获取互斥锁，返回是否成功。Redis 用 SET NX EX，内存模式用字典模拟。"""
+    if not key:
+        return False
+    full_key = f"lock:{key}"
+    if _is_redis_mode():
+        r = _get_redis()
+        return bool(r.set(full_key, str(owner), nx=True, ex=max(1, int(ttl))))
+    with _memory_lock:
+        data = _memory_store.get(full_key)
+        now = time.time()
+        if isinstance(data, dict) and data.get("_expiry", 0) > now:
+            return False
+        _memory_store[full_key] = {
+            "value": str(owner),
+            "_expiry": now + max(1, ttl),
+        }
+        return True
+
+
+def release_lock(key, owner=None):
+    """释放互斥锁；owner 非空时仅释放属于自己的锁，避免误删他人锁。"""
+    if not key:
+        return
+    full_key = f"lock:{key}"
+    if _is_redis_mode():
+        r = _get_redis()
+        if owner is None:
+            r.delete(full_key)
+            return
+        _RELEASE_LUA = (
+            "if redis.call('get', KEYS[1]) == ARGV[1] then "
+            "return redis.call('del', KEYS[1]) else return 0 end"
+        )
+        try:
+            r.eval(_RELEASE_LUA, 1, full_key, str(owner))
+        except Exception:
+            pass
+        return
+    with _memory_lock:
+        data = _memory_store.get(full_key)
+        if isinstance(data, dict) and (
+            owner is None or data.get("value") == str(owner)
+        ):
+            _memory_store.pop(full_key, None)
+
+
+# ── 人工会话接管状态（AI/人工 控制权） ──
+
+def set_human_state(username, state, ttl=86400):
+    """记录某用户当前的人工接管状态。state: {"ticket_id","session_id","mode","agent","taken_at"}"""
+    if not username:
+        return
+    set_cache(f"human:{username}", state, ttl=ttl)
+
+
+def get_human_state(username):
+    if not username:
+        return None
+    return get_cache(f"human:{username}")
+
+
+def clear_human_state(username):
+    if not username:
+        return
+    delete_cache(f"human:{username}")
+
+
 # ── 健康检查 ──
 
 def health_check():
