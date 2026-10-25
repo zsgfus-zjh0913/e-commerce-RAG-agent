@@ -743,7 +743,12 @@ def get_user_dir(username):
     return user_dir
 
 
+_SAFE_CONV_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
 def get_conversation_filepath(username, conv_id):
+    if not _SAFE_CONV_ID_RE.fullmatch(conv_id):
+        return None
     return get_user_dir(username) / f"{conv_id}.json"
 
 
@@ -767,6 +772,8 @@ def list_conversations(username):
 
 def load_conversation(username, conv_id):
     filepath = get_conversation_filepath(username, conv_id)
+    if filepath is None:
+        return None
     if filepath.exists():
         return json.loads(filepath.read_text(encoding="utf-8"))
     return None
@@ -774,6 +781,8 @@ def load_conversation(username, conv_id):
 
 def save_conversation(username, conv_id, data):
     filepath = get_conversation_filepath(username, conv_id)
+    if filepath is None:
+        return
     filepath.write_text(
         json.dumps(data, ensure_ascii=False), encoding="utf-8"
     )
@@ -781,6 +790,8 @@ def save_conversation(username, conv_id, data):
 
 def delete_conversation(username, conv_id):
     filepath = get_conversation_filepath(username, conv_id)
+    if filepath is None:
+        return False
     if filepath.exists():
         filepath.unlink()
         return True
@@ -1872,38 +1883,11 @@ def api_ticket_history(ticket_id):
 @app.route("/api/ticket/<ticket_id>/process", methods=["POST"])
 @login_required
 def api_ticket_process(ticket_id):
-    username = request.user["username"]
-    data = request.get_json(silent=True) or {}
-    action = data.get("action", "")
-    reply = sanitize_input(data.get("reply", ""), max_length=1000)
+    """工单状态流转（approve/reject/resolve）为坐席专用操作，普通用户不可自助审批。
 
-    if action not in ("approve", "reject", "resolve"):
-        return jsonify({"error": "操作类型无效"}), 400
-
-    db = get_db()
-    try:
-        ticket = db.query(Ticket).filter(
-            Ticket.ticket_id == ticket_id,
-            Ticket.username == username,
-        ).first()
-        if not ticket:
-            return jsonify({"error": "工单不存在"}), 404
-
-        status_map = {
-            "approve": "approved",
-            "reject": "rejected",
-            "resolve": "resolved",
-        }
-        ticket.status = status_map[action]
-        ticket.agent_reply = reply
-        ticket.updated_at = int(time.time())
-        db.commit()
-        return jsonify({"success": True, "ticket": ticket.to_dict()})
-    except Exception as e:
-        db.rollback()
-        return jsonify({"error": str(e)}), 500
-    finally:
-        close_db(db)
+    坐席处理请走 agent_routes 的 /api/agent/ticket/<id>/process；用户确认退款请走 /api/refund/confirm。
+    """
+    return jsonify({"error": "该操作需要坐席权限"}), 403
 
 
 # ── 用户确认退款（从退款卡片触发） ──

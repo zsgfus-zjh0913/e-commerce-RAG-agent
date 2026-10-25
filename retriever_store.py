@@ -78,23 +78,36 @@ class NumpyTfidfStore(RetrieverStore):
         if not chunks:
             return
 
-        for chunk in chunks:
+        new_emb_rows = []
+        for i, chunk in enumerate(chunks):
             cid = chunk.get("chunk_id", "")
-            if cid and cid in self._chunk_index:
-                for idx in self._chunk_index[cid]:
+            emb = embeddings[i] if embeddings is not None else None
+            existing = self._chunk_index.get(cid) if cid else None
+            if cid and existing:
+                # 更新：原地替换 chunk，并同步替换对应嵌入行（不增加行数）
+                for idx in existing:
                     self.chunks[idx] = chunk
+                    if (
+                        emb is not None
+                        and self.embeddings is not None
+                        and idx < len(self.embeddings)
+                    ):
+                        self.embeddings[idx] = emb
             else:
+                # 新增：chunk 与嵌入行同步追加
                 self.chunks.append(chunk)
                 if cid:
                     if cid not in self._chunk_index:
                         self._chunk_index[cid] = []
                     self._chunk_index[cid].append(len(self.chunks) - 1)
+                if emb is not None:
+                    new_emb_rows.append(emb)
 
-        if embeddings is not None:
+        if new_emb_rows:
             if self.embeddings is not None and len(self.embeddings) > 0:
-                self.embeddings = np.vstack([self.embeddings, embeddings])
+                self.embeddings = np.vstack([self.embeddings, np.array(new_emb_rows)])
             else:
-                self.embeddings = embeddings
+                self.embeddings = np.array(new_emb_rows)
 
         self._build_tfidf()
 

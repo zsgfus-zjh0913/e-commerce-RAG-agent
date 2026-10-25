@@ -2,6 +2,7 @@ import os
 import time
 import uuid
 import jwt
+import re
 import bcrypt
 from datetime import datetime, timedelta, timezone
 
@@ -84,6 +85,8 @@ class AuthManager:
             return {"success": False, "message": "用户名和密码不能为空"}
         if len(username) < 2:
             return {"success": False, "message": "用户名至少2个字符"}
+        if not re.fullmatch(r"[A-Za-z0-9_\u4e00-\u9fa5-]{2,20}", username):
+            return {"success": False, "message": "用户名只能包含中英文、数字、下划线或连字符"}
         if len(password) < 4:
             return {"success": False, "message": "密码至少4个字符"}
         if gender not in ("male", "female"):

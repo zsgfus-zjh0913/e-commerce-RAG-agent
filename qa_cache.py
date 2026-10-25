@@ -112,8 +112,10 @@ class QACache:
             return None
 
         with self._lock:
-            # 1) 精确匹配
+            # 1) 精确匹配（跳过工具类缓存，避免跨用户数据泄漏）
             for it in self._items:
+                if it.get("source") == "tool":
+                    continue
                 if it["normalized"] == norm:
                     if _is_negative_answer(it["answer"]):
                         continue
@@ -125,6 +127,8 @@ class QACache:
                 return None
             best, best_score = None, -1.0
             for it in self._items:
+                if it.get("source") == "tool":
+                    continue
                 if it["embedding"] is None:
                     continue
                 score = float(np.dot(q_emb, it["embedding"]))
@@ -140,6 +144,10 @@ class QACache:
 
     def store(self, question, answer, source=""):
         norm = _normalize(question)
+        # 工具类回答（订单/物流/售后）依赖实时数据且含用户特定信息，
+        # 不可跨用户缓存，直接跳过。
+        if source == "tool":
+            return None
         if not norm or not answer or _is_negative_answer(answer):
             return None
 
