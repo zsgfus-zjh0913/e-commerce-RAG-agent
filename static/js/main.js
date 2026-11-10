@@ -120,12 +120,14 @@ sidebarOverlay.addEventListener("click", closeSidebar);
 // ═══ API Key 面板 ═══
 apiKeyToggle.addEventListener("click", (e) => {
     e.stopPropagation();
-    apiKeyDropdown.classList.toggle("show");
+    const open = apiKeyDropdown.classList.toggle("show");
+    apiKeyToggle.setAttribute("aria-expanded", String(open));
 });
 
 document.addEventListener("click", (e) => {
     if (!apiKeyDropdown.contains(e.target) && !apiKeyToggle.contains(e.target)) {
         apiKeyDropdown.classList.remove("show");
+        apiKeyToggle.setAttribute("aria-expanded", "false");
     }
 });
 
@@ -245,10 +247,18 @@ function renderHistoryList(convs) {
     convs.forEach((conv) => {
         const item = document.createElement("div");
         item.className = "history-item" + (conv.id === conversationId ? " active" : "");
+        item.tabIndex = 0;
+        item.setAttribute("role", "button");
         item.onclick = () => loadConversation(conv.id);
+        item.onkeydown = (e) => {
+            if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                loadConversation(conv.id);
+            }
+        };
         item.innerHTML = `
             <span class="history-item-title">${escapeHtml(conv.title)}</span>
-            <button class="history-item-delete" onclick="deleteConversation(event, '${conv.id}')" title="删除">✕</button>
+            <button class="history-item-delete" onclick="deleteConversation(event, '${conv.id}')" title="删除" aria-label="删除对话">✕</button>
         `;
         historyList.appendChild(item);
     });
@@ -993,7 +1003,15 @@ function renderTicketList(tickets) {
         item.className = "ticket-card" + (t.ticket_id === activeTicketId ? " active" : "");
         if (isLiveTicket(t)) {
             item.classList.add("clickable");
+            item.tabIndex = 0;
+            item.setAttribute("role", "button");
             item.onclick = () => resumeHumanSession(t);
+            item.onkeydown = (e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    resumeHumanSession(t);
+                }
+            };
         }
         item.innerHTML = `
             <div class="ticket-card-header">

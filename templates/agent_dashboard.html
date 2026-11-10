@@ -63,11 +63,11 @@
         }
         .stat-card .stat-label { font-size: 12px; color: #a0aec0; font-weight: 600; }
         .stat-card .stat-value { font-size: 28px; font-weight: 800; margin-top: 6px; }
-        .stat-card.pending .stat-value { color: #d69e2e; }
-        .stat-card.approved .stat-value { color: #38a169; }
-        .stat-card.rejected .stat-value { color: #e53e3e; }
-        .stat-card.resolved .stat-value { color: #3182ce; }
-        .stat-card.orders .stat-value { color: #805ad5; }
+        .stat-card.pending .stat-value { color: #8a6316; }
+        .stat-card.approved .stat-value { color: #2f6b4a; }
+        .stat-card.rejected .stat-value { color: #9b3b3b; }
+        .stat-card.resolved .stat-value { color: #3f5580; }
+        .stat-card.orders .stat-value { color: #6b5b96; }
         .section { margin-bottom: 24px; }
         .section-title { font-size: 16px; font-weight: 700; margin-bottom: 12px; color: #1a1a2e; }
         .ticket-table, .order-table, .log-table {
@@ -257,6 +257,225 @@
             .ticket-table, .order-table { font-size: 12px; }
             .ticket-table th, .ticket-table td, .order-table th, .order-table td { padding: 8px; }
         }
+
+        /* ============================================================
+           设计系统对齐层
+           把工作台统一到「暖小助」视觉语言（与 static/css/style.css 同源）
+           仅覆盖视觉，不改任何结构与交互逻辑
+           ============================================================ */
+        body {
+            background: #f5f6f8;
+            color: #16181c;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        /* 顶栏：去掉深蓝渐变，改为浅色玻璃层 */
+        .dashboard-header {
+            position: sticky;
+            top: 0;
+            z-index: 20;
+            background: rgba(255, 255, 255, 0.78);
+            backdrop-filter: blur(18px) saturate(1.4);
+            -webkit-backdrop-filter: blur(18px) saturate(1.4);
+            color: #16181c;
+            border-bottom: 1px solid #e8eaee;
+            box-shadow: none;
+        }
+        .header-left h1 { font-size: 16px; font-weight: 650; letter-spacing: -0.01em; }
+        .header-left .badge {
+            background: #f1f3fa; color: #3d4a82;
+            border: 1px solid #e3e7f4; font-weight: 600;
+        }
+        .agent-name { color: #5a6068; opacity: 1; }
+        .btn-logout {
+            background: #fff; color: #5a6068;
+            border: 1px solid #dcdfe5; border-radius: 9px;
+            transition: background 0.28s cubic-bezier(0.22, 0.61, 0.36, 1),
+                color 0.28s cubic-bezier(0.22, 0.61, 0.36, 1);
+        }
+        .btn-logout:hover { background: #f0f2f5; color: #16181c; }
+
+        /* 标签页 */
+        .tabs { background: transparent; border-bottom: 1px solid #e8eaee; gap: 2px; }
+        .tab {
+            color: #6e7681; font-weight: 500;
+            border-radius: 9px 9px 0 0;
+            transition: color 0.28s cubic-bezier(0.22, 0.61, 0.36, 1),
+                background 0.28s cubic-bezier(0.22, 0.61, 0.36, 1);
+        }
+        .tab:hover { color: #16181c; background: #f0f2f5; }
+        .tab.active { color: #3d4a82; border-bottom-color: #5a6bb5; }
+        .tab .tab-count { background: #f0f2f5; color: #5a6068; }
+        .tab .tab-count.pending { background: #fbf2e2; color: #8a6316; }
+
+        /* 卡片与表格：统一圆角、发丝边框、极轻阴影 */
+        .stat-card,
+        .ticket-table,
+        .order-table,
+        .log-table,
+        .session-card,
+        .chat-panel,
+        .doc-card {
+            border: 1px solid #e8eaee;
+            border-radius: 14px;
+            box-shadow: 0 1px 2px rgba(16, 18, 24, 0.04);
+        }
+        .stat-card .stat-label { color: #6e7681; font-weight: 500; }
+        .stat-card .stat-value { font-weight: 700; letter-spacing: -0.02em; }
+        .ticket-table th,
+        .order-table th,
+        .log-table th {
+            background: #fafbfc; color: #6e7681; font-weight: 600;
+            letter-spacing: 0.06em; border-bottom: 1px solid #e8eaee;
+        }
+        .ticket-table td,
+        .order-table td,
+        .log-table td { border-bottom: 1px solid #f0f2f5; color: #5a6068; }
+        .section-title { font-size: 14px; font-weight: 650; color: #16181c; }
+
+        /* 状态与类型标签：低饱和配色 */
+        .status-badge.pending { background: #fbf2e2; color: #8a6316; }
+        .status-badge.approved { background: #eaf4ee; color: #2f6b4a; }
+        .status-badge.rejected { background: #fbecec; color: #9b3b3b; }
+        .status-badge.resolved { background: #edf1f8; color: #3f5580; }
+        .type-badge { border-radius: 999px; }
+        .type-badge.refund { background: #f1f3fa; color: #3d4a82; }
+        .type-badge.human_agent { background: #eaf4ee; color: #2f6b4a; }
+        .type-badge.exchange { background: #fbf2e2; color: #8a6316; }
+        .type-badge.after_sale { background: #edf1f8; color: #3f5580; }
+
+        /* 输入框与按钮：统一焦点环与主色 */
+        .reply-input,
+        .search-input,
+        .order-status-select {
+            background: #fafbfc; border-color: #dcdfe5; border-radius: 9px;
+            transition: border-color 0.28s cubic-bezier(0.22, 0.61, 0.36, 1),
+                box-shadow 0.28s cubic-bezier(0.22, 0.61, 0.36, 1),
+                background 0.28s cubic-bezier(0.22, 0.61, 0.36, 1);
+        }
+        .reply-input:focus,
+        .search-input:focus,
+        .order-status-select:focus {
+            background: #fff; border-color: #5a6bb5;
+            box-shadow: 0 0 0 3px rgba(90, 107, 181, 0.18);
+        }
+        .search-btn,
+        .filter-btn.active {
+            background: #5a6bb5; border-color: #5a6bb5; border-radius: 9px;
+            transition: background 0.28s cubic-bezier(0.22, 0.61, 0.36, 1);
+        }
+        .search-btn:hover { background: #4b5a9e; }
+        .filter-btn {
+            border-color: #e8eaee; color: #6e7681;
+            transition: color 0.28s cubic-bezier(0.22, 0.61, 0.36, 1),
+                border-color 0.28s cubic-bezier(0.22, 0.61, 0.36, 1),
+                background 0.28s cubic-bezier(0.22, 0.61, 0.36, 1);
+        }
+        .filter-btn:hover { color: #16181c; border-color: #dcdfe5; }
+        .action-btn,
+        .btn-accept,
+        .btn-end,
+        .session-action-btn { border-radius: 9px; }
+
+        /* 会话卡片左侧强调线 */
+        .session-card.active { border-color: #e8eaee; border-left-color: #2f6b4a; }
+        .session-card.pending { border-color: #e8eaee; border-left-color: #8a6316; }
+
+        .empty-state { color: #6e7681; }
+        .chat-panel-header,
+        .chat-session-bar { background: #fafbfc; border-bottom-color: #e8eaee; }
+
+        /* 操作按钮：低饱和描边式，hover 才实心，避免整屏彩色块 */
+        .action-btn.approve,
+        .btn-accept {
+            background: #eaf4ee; color: #2f6b4a; border: 1px solid #d8e9e0;
+        }
+        .action-btn.approve:hover,
+        .btn-accept:hover { background: #2f6b4a; color: #fff; border-color: #2f6b4a; }
+        .action-btn.reject,
+        .btn-end {
+            background: #fbecec; color: #9b3b3b; border: 1px solid #f0dada;
+        }
+        .action-btn.reject:hover,
+        .btn-end:hover { background: #9b3b3b; color: #fff; border-color: #9b3b3b; }
+        .action-btn.resolve {
+            background: #edf1f8; color: #3f5580; border: 1px solid #dfe6f2;
+        }
+        .action-btn.resolve:hover { background: #3f5580; color: #fff; border-color: #3f5580; }
+        .btn-end:disabled { background: #f6f7f9; color: #9aa0a8; border-color: #eceef2; }
+
+        /* 键盘焦点：与聊天页同一枚焦点环 */
+        .tab:focus-visible,
+        .action-btn:focus-visible,
+        .btn-accept:focus-visible,
+        .btn-end:focus-visible,
+        .btn-logout:focus-visible,
+        .search-btn:focus-visible,
+        .filter-btn:focus-visible,
+        .session-action-btn:focus-visible {
+            outline: none;
+            box-shadow: 0 0 0 3px rgba(90, 107, 181, 0.28);
+        }
+
+        /* 尊重系统「减弱动态效果」设置 */
+        @media (prefers-reduced-motion: reduce) {
+            *,
+            *::before,
+            *::after {
+                transition-duration: 0.01ms !important;
+                animation-duration: 0.01ms !important;
+            }
+        }
+
+        /* 窄屏下表格改为容器内横向滚动，避免撑出整页横向滚动条 */
+        @media (max-width: 1100px) {
+            .tab-panel,
+            .section { overflow-x: auto; }
+            .stats-grid { grid-template-columns: repeat(3, 1fr); }
+            /* 保住列宽，避免"退 款"之类标签被挤成竖排 */
+            .ticket-table { min-width: 880px; }
+            .ticket-table td:first-child { white-space: nowrap; }
+            .order-table,
+            .log-table { min-width: 760px; }
+        }
+
+        /* 状态/类型标签不换行，宽度再窄也保持单行 */
+        .status-badge,
+        .type-badge { white-space: nowrap; }
+
+        /* 移动端：边距、横向滚动与触控高度 */
+        @media (max-width: 768px) {
+            .content { padding: 16px; }
+            .dashboard-header { padding: 12px 16px; }
+            .header-left h1 { font-size: 15px; }
+            .tabs { padding: 0 12px; overflow-x: auto; }
+            .tab { padding: 12px 14px; white-space: nowrap; }
+            .action-btn,
+            .btn-accept,
+            .btn-end,
+            .session-action-btn { min-height: 36px; }
+            .chat-panel { height: min(500px, 62vh); }
+        }
+
+        /* 横向滚动条统一收细，去掉系统默认的粗灰条 */
+        .tabs,
+        .tab-panel,
+        .section {
+            scrollbar-width: thin;
+            scrollbar-color: #dcdfe5 transparent;
+        }
+        .tabs::-webkit-scrollbar,
+        .tab-panel::-webkit-scrollbar,
+        .section::-webkit-scrollbar { height: 6px; }
+        .tabs::-webkit-scrollbar-thumb,
+        .tab-panel::-webkit-scrollbar-thumb,
+        .section::-webkit-scrollbar-thumb {
+            background: #dcdfe5;
+            border-radius: 999px;
+        }
+        .tabs::-webkit-scrollbar-track,
+        .tab-panel::-webkit-scrollbar-track,
+        .section::-webkit-scrollbar-track { background: transparent; }
     </style>
 </head>
 <body>
